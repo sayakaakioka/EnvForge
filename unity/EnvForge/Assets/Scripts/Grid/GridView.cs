@@ -118,6 +118,16 @@ public class GridView : MonoBehaviour
 
     }
 
+    public Vector3 GridToWorldPosition(int x, int y, float yOffset = 0.35f)
+    {
+        if (gridRoot == null)
+        {
+            return new Vector3(x, yOffset, y);
+        }
+
+        return gridRoot.TransformPoint(new Vector3(x, yOffset, y));
+    }
+
     private void ClearGrid()
     {
         foreach (var cellView in cellViews)

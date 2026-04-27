@@ -116,6 +116,8 @@ public class SummaryData
 public class ArtifactData
 {
     public ModelArtifactData model;
+    public ModelArtifactData onnx_model;
+    public ModelArtifactData sentis_model;
 }
 
 [Serializable]
@@ -124,4 +126,7 @@ public class ModelArtifactData
     public string storage;
     public string bucket;
     public string path;
+    public string format;
+    public string target;
+    public int opset_version;
 }

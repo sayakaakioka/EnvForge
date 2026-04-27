@@ -28,6 +28,7 @@ This repository is currently in an early prototyping phase. The initial goal is 
 - HTTP API calls for submit, train, and result retrieval
 - WebSocket notifications for queued, starting, running, completed, and failed states
 - Model artifact download into Unity persistent storage
+- Local ONNX Runtime inference for moving the robot in the Unity scene
 
 ## Non-Goals (for now)
 
@@ -93,6 +94,8 @@ Application.persistentDataPath/Models/
 ```
 
 The configured `Model Download Directory Name` controls the `Models` folder name. Displayed paths are normalized to use `/` separators.
+
+After an `.onnx` model is downloaded, EnvForge uses ONNX Runtime Unity to run the policy locally and move a robot from the configured start position toward the goal. The current player supports coordinate-based observations and configurable action ordering through the `RobotPolicyPlayer` component.
 
 ## License
 
