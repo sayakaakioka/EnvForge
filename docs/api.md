@@ -152,6 +152,19 @@ Example completed response:
       "storage": "gcs",
       "bucket": "my-model-bucket",
       "path": "models/submission-123/policy.zip"
+    },
+    "onnx_model": {
+      "storage": "gcs",
+      "bucket": "my-model-bucket",
+      "path": "models/submission-123/policy.onnx"
+    },
+    "sentis_model": {
+      "storage": "gcs",
+      "bucket": "my-model-bucket",
+      "path": "models/submission-123/policy.sentis.onnx",
+      "format": "onnx",
+      "target": "unity-sentis",
+      "opset_version": 15
     }
   },
   "updated_at": "2026-04-24T12:34:56.000000+00:00"
@@ -172,13 +185,15 @@ Expected flow:
 2. User starts training.
 3. Unity connects to the WebSocket URL for the returned `submission_id`.
 4. Server sends `queued`, `starting`, `running`, `completed`, or `failed` result JSON.
-5. On `completed`, Unity downloads the model artifact.
+5. On `completed`, Unity downloads the ONNX model artifact when available.
 
 If the WebSocket URL is missing or the connection fails, Unity falls back to HTTP polling when auto polling is enabled.
 
 ## Model Artifacts
 
-Current Unity behavior supports direct download from:
+Current Unity behavior uses ONNX Runtime Unity for local policy inference. It accepts ONNX artifacts from `artifacts.sentis_model`, `artifacts.onnx_model`, or `artifacts.model`, as long as the artifact has `format: "onnx"` or a `.onnx` path.
+
+Unity supports direct download from:
 
 - Public HTTP or HTTPS artifact paths.
 - Public Google Cloud Storage objects represented as:
@@ -187,7 +202,7 @@ Current Unity behavior supports direct download from:
 {
   "storage": "gcs",
   "bucket": "my-model-bucket",
-  "path": "models/submission-123/policy.zip"
+  "path": "models/submission-123/policy.onnx"
 }
 ```
 
@@ -199,6 +214,8 @@ https://storage.googleapis.com/{bucket}/{path}
 
 This requires the object to be publicly readable. If the bucket/object is private, the backend should return a signed download URL or expose a server-side download endpoint.
 
+For Unity playback, the ONNX model should be exported with an ONNX Runtime compatible graph. The current server convention may return this as `artifacts.sentis_model` with `format: "onnx"` and a path such as `policy.sentis.onnx`; despite the field name, Unity treats it as an ONNX Runtime model.
+
 Downloaded files are saved below:
 
 ```text
@@ -208,14 +225,16 @@ Application.persistentDataPath/{Model Download Directory Name}/
 For example, an artifact path of:
 
 ```text
-models/submission-123/policy.zip
+models/submission-123/policy.sentis.onnx
 ```
 
 is saved as:
 
 ```text
-Application.persistentDataPath/Models/models/submission-123/policy.zip
+Application.persistentDataPath/Models/models/submission-123/policy.sentis.onnx
 ```
+
+After the `.onnx` file is downloaded, `RobotPolicyPlayer` loads it with ONNX Runtime Unity, builds an observation from the current grid state, predicts an action, and moves a visible robot one grid cell per inference step.
 
 ## Public Repository Safety
 

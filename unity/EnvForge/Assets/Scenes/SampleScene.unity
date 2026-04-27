@@ -2193,6 +2193,8 @@ MonoBehaviour:
     eval_episodes: 20
   statusText: {fileID: 224908145}
   environmentManager: {fileID: 1385027839}
+  gridView: {fileID: 0}
+  robotPolicyPlayer: {fileID: 0}
   autoPollResults: 1
   resultPollIntervalSeconds: 60
 --- !u!4 &1047589130

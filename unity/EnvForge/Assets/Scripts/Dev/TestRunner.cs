@@ -18,6 +18,8 @@ public class TestRunner : MonoBehaviour
     [SerializeField] private TrainingRequestData training = new TrainingRequestData();
     [SerializeField] private TMP_Text statusText = null;
     [SerializeField] private EnvironmentManager environmentManager = null;
+    [SerializeField] private GridView gridView = null;
+    [SerializeField] private RobotPolicyPlayer robotPolicyPlayer = null;
     [SerializeField] private bool autoPollResults = true;
     [SerializeField] private float resultPollIntervalSeconds = 60f;
 
@@ -57,12 +59,14 @@ public class TestRunner : MonoBehaviour
     {
         StopAutoPolling();
         StopTrainingWebSocket();
+        robotPolicyPlayer?.Stop();
     }
 
     public void OnClickSubmit()
     {
         StopAutoPolling();
         StopTrainingWebSocket();
+        robotPolicyPlayer?.Stop();
 
         if (!TryCreateApiClient())
         {
@@ -290,7 +294,7 @@ public class TestRunner : MonoBehaviour
             return;
         }
 
-        string modelPath = BuildModelPath(data);
+        string modelPath = BuildModelPath(GetPlayableModelArtifact(data));
 
         SetStatus(
             "Done\n" +
@@ -402,34 +406,124 @@ public class TestRunner : MonoBehaviour
 
     private void StartModelDownload(ResultData data)
     {
+        ModelArtifactData model = GetPlayableModelArtifact(data);
+
         if (modelDownloadStarted ||
-            data.artifacts == null ||
-            data.artifacts.model == null)
+            model == null)
         {
+            if (model == null)
+            {
+                SetStatus("No playable ONNX model artifact found.");
+                Debug.LogError("No playable ONNX model artifact found in result artifacts.\n" + DescribeArtifacts(data));
+            }
+
             return;
         }
 
         modelDownloadStarted = true;
-        StartCoroutine(DownloadModel(data.artifacts.model));
+        StartCoroutine(DownloadModel(model));
+    }
+
+    private ModelArtifactData GetPlayableModelArtifact(ResultData data)
+    {
+        if (data.artifacts == null)
+        {
+            return null;
+        }
+
+        if (IsOnnxArtifact(data.artifacts.sentis_model))
+        {
+            return data.artifacts.sentis_model;
+        }
+
+        if (IsOnnxArtifact(data.artifacts.onnx_model))
+        {
+            return data.artifacts.onnx_model;
+        }
+
+        if (IsOnnxArtifact(data.artifacts.model))
+        {
+            return data.artifacts.model;
+        }
+
+        return null;
+    }
+
+    private bool IsOnnxArtifact(ModelArtifactData model)
+    {
+        return model != null &&
+               !string.IsNullOrEmpty(model.path) &&
+               (model.path.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(model.format, "onnx", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string DescribeArtifacts(ResultData data)
+    {
+        if (data.artifacts == null)
+        {
+            return "artifacts: null";
+        }
+
+        return "model: " + DescribeArtifact(data.artifacts.model) + "\n" +
+               "onnx_model: " + DescribeArtifact(data.artifacts.onnx_model) + "\n" +
+               "sentis_model: " + DescribeArtifact(data.artifacts.sentis_model);
+    }
+
+    private string DescribeArtifact(ModelArtifactData artifact)
+    {
+        if (artifact == null)
+        {
+            return "null";
+        }
+
+        return "path=" + artifact.path +
+               ", format=" + artifact.format +
+               ", target=" + artifact.target +
+               ", opset_version=" + artifact.opset_version;
     }
 
     private IEnumerator DownloadModel(ModelArtifactData model)
     {
-        SetStatus("Downloading model...");
+        SetStatus("Downloading ONNX model...");
 
         ApiResult<string> result = null;
         yield return ModelDownloadClient.Download(model, apiSettings.ModelDownloadDirectoryName, response => result = response);
 
         if (!result.IsSuccess)
         {
-            SetStatus("Model download failed: " + result.Error);
-            Debug.LogError("Model download failed: " + result.Error);
+            SetStatus("ONNX model download failed: " + result.Error);
+            Debug.LogError("ONNX model download failed: " + result.Error);
             yield break;
         }
 
         string displayPath = result.Data.Replace('\\', '/');
-        SetStatus("Model downloaded: " + displayPath);
-        Debug.Log("Model downloaded: " + displayPath);
+        SetStatus("ONNX model downloaded: " + displayPath);
+        Debug.Log("ONNX model downloaded: " + displayPath);
+
+        if (!result.Data.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("Downloaded model is not an .onnx file.");
+            Debug.LogError("Downloaded model is not an .onnx file: " + displayPath);
+            yield break;
+        }
+
+        PlayDownloadedModel(result.Data);
+    }
+
+    private void PlayDownloadedModel(string modelPath)
+    {
+        if (robotPolicyPlayer == null)
+        {
+            robotPolicyPlayer = FindFirstObjectByType<RobotPolicyPlayer>();
+        }
+
+        if (robotPolicyPlayer == null)
+        {
+            robotPolicyPlayer = gameObject.AddComponent<RobotPolicyPlayer>();
+        }
+
+        robotPolicyPlayer.Initialize(environmentManager, gridView);
+        robotPolicyPlayer.Play(modelPath);
     }
 
     private string BuildProgressStatus(ResultData data, string fallback)
@@ -446,14 +540,13 @@ public class TestRunner : MonoBehaviour
         return message;
     }
 
-    private string BuildModelPath(ResultData data)
+    private string BuildModelPath(ModelArtifactData model)
     {
-        if (data.artifacts == null || data.artifacts.model == null)
+        if (model == null)
         {
             return "";
         }
 
-        ModelArtifactData model = data.artifacts.model;
         if (string.IsNullOrEmpty(model.bucket))
         {
             return model.path;
