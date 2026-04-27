@@ -1,0 +1,13 @@
+* text=auto
+
+# Unity / C#
+*.cs text eol=lf
+*.meta text eol=lf
+*.unity text eol=lf
+
+# JSON / config
+*.json text eol=lf
+*.md text eol=lf
+
+# Windows系（必要なら）
+*.bat text eol=crlf

@@ -1,0 +1,105 @@
+# =========================
+# Unity Generated Folders
+# =========================
+
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+UserSettings/
+MemoryCaptures/
+
+# =========================
+# Unity Cache / Artifacts
+# =========================
+
+*.log
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# =========================
+# Visual Studio / Rider
+# =========================
+
+.vscode/
+.vs/
+.idea/
+*.csproj
+*.unityproj
+*.sln
+*.slnx
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb.meta
+
+# =========================
+# OS Files
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+# Unity Package Cache
+# =========================
+
+/Packages/packages-lock.json
+
+# =========================
+# Crash Reports
+# =========================
+
+sysinfo.txt
+
+# =========================
+# Addressables / Asset Bundles
+# =========================
+
+/ServerData/
+/StreamingAssets/aa.meta
+/StreamingAssets/aa/
+
+# =========================
+# Build Outputs
+# =========================
+
+*.apk
+*.aab
+*.unitypackage
+*.app
+*.exe
+
+# =========================
+# Generated files (optional but safe)
+# =========================
+
+# Uncomment if you don't want auto-generated meta for IDE files
+# *.csproj.meta
+# *.sln.meta
+
+# =========================
+# Python / misc (if mixed repo)
+# =========================
+
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# =========================
+# Local data (important for your case)
+# =========================
+
+# Local API endpoints
+unity/EnvForge/Assets/Settings/ApiSettings.asset
+unity/EnvForge/Assets/Settings/ApiSettings.asset.meta
+
