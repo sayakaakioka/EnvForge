@@ -103,3 +103,6 @@ __pycache__/
 unity/EnvForge/Assets/Settings/ApiSettings.asset
 unity/EnvForge/Assets/Settings/ApiSettings.asset.meta
 
+# ML-Agents training outputs
+results/
+
