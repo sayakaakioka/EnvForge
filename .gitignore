@@ -99,10 +99,8 @@ __pycache__/
 # Local data (important for your case)
 # =========================
 
-# Local API endpoints
-unity/EnvForge/Assets/Settings/ApiSettings.asset
-unity/EnvForge/Assets/Settings/ApiSettings.asset.meta
-
 # ML-Agents training outputs
 results/
 
+# ML-Agents generated timer logs
+unity/EnvForge-local-first/Assets/ML-Agents/Timers/
