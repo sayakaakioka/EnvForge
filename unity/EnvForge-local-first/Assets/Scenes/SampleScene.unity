@@ -399,7 +399,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &644133571
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -407,7 +407,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 644133570}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 7e12cd21f6574b14bd126a2befc853c7, type: 3}
   m_Name: 
@@ -481,6 +481,64 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1427633311
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1427633313}
+  - component: {fileID: 1427633312}
+  m_Layer: 0
+  m_Name: Mvp2Bootstrap
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 0
+--- !u!114 &1427633312
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1427633311}
+  m_Enabled: 0
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9bfe177c58044f8db9fbbf5af3b81515, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EnvForge.Mvp2.Mvp2SceneBuilder
+  floorSize: {x: 16, y: 12}
+  wallHeight: 1.8
+  wallThickness: 0.35
+  goalReachRadius: 1.2
+  behaviorName: Mvp2VisualNavigation
+  saveSegmentationFrames: 0
+  saveSegmentationEverySteps: 100
+  showSegmentationPreview: 1
+  segmentationPreviewRect:
+    serializedVersion: 2
+    x: 0.78
+    y: 0.02
+    width: 0.2
+    height: 0.2
+--- !u!4 &1427633313
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1427633311}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -0, y: -0, z: -0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1733993771
 GameObject:
   m_ObjectHideFlags: 0
@@ -498,7 +556,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1733993772
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -542,6 +600,67 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2127491170
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2127491172}
+  - component: {fileID: 2127491171}
+  m_Layer: 0
+  m_Name: NavigationBootstrap
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &2127491171
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2127491170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 28f2f0a5c4d940d095b5f52d56088fae, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EnvForge.Navigation.NavigationSceneBuilder
+  floorSize: {x: 16, y: 12}
+  wallHeight: 1.8
+  wallThickness: 0.35
+  goalReachRadius: 1.2
+  behaviorName: NavigationFinal
+  inferenceModel: {fileID: 5022602860645237092, guid: 95de586a65564a8b96e742723c68d1f3, type: 3}
+  inferenceDevice: 0
+  deterministicInference: 1
+  saveSegmentationFrames: 0
+  saveSegmentationEverySteps: 100
+  showSegmentationPreview: 1
+  segmentationPreviewRect:
+    serializedVersion: 2
+    x: 0.74
+    y: 0.02
+    width: 0.24
+    height: 0.18
+--- !u!4 &2127491172
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2127491170}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -0, y: -0, z: -0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -551,3 +670,5 @@ SceneRoots:
   - {fileID: 832575519}
   - {fileID: 1733993774}
   - {fileID: 644133572}
+  - {fileID: 1427633313}
+  - {fileID: 2127491172}
