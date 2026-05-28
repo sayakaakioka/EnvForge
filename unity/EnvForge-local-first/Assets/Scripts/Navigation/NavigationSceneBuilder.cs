@@ -10,15 +10,15 @@ namespace EnvForge.Navigation
 {
     public sealed class NavigationSceneBuilder : MonoBehaviour
     {
-        private static readonly Vector3 AgentStartPosition = new(-6f, 0.6f, -4f);
-        private static readonly Quaternion AgentStartRotation = Quaternion.Euler(0f, 45f, 0f);
-        private static readonly Vector3 GoalStartPosition = new(6f, 1.2f, 4f);
-        private const int SegmentationImageHeight = 84;
-        private const int SegmentationImageWidth = 112;
+        private static readonly Vector3 AgentStartPosition = NavigationScenarioBundleDefaults.AgentStartPosition;
+        private static readonly Quaternion AgentStartRotation = NavigationScenarioBundleDefaults.AgentStartRotation;
+        private static readonly Vector3 GoalStartPosition = NavigationScenarioBundleDefaults.GoalStartPosition;
+        private const int SegmentationImageHeight = NavigationScenarioBundleDefaults.SegmentationImageHeight;
+        private const int SegmentationImageWidth = NavigationScenarioBundleDefaults.SegmentationImageWidth;
         private const int HiddenFromSegmentationCameraLayer = 2;
-        private const int MaxEpisodeSteps = 1000;
+        private const int MaxEpisodeSteps = NavigationScenarioBundleDefaults.MaxEpisodeSteps;
         private const string TrainingModeArgument = "--envforge-train";
-        private const string DefaultScenarioId = "navigation_default";
+        private const string DefaultScenarioId = NavigationScenarioBundleDefaults.ScenarioId;
 
         [SerializeField] private Vector2 floorSize = new(16f, 12f);
         [SerializeField] private float wallHeight = 1.8f;

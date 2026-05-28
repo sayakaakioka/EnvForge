@@ -89,6 +89,11 @@ EnvForge 側では、ユーザが作った環境を Scenario Bundle に変換し
 が持つオブジェクト配置や報酬設定を、バージョン付きの
 契約形式に変換してから送信する。
 
+Phase 3 の最初の実装は、クラウド送信 UI ではなく Scenario Bundle fixture
+の検証導線とする。EnvForge 側に canonical fixture を置き、EmbodiedLab 側の
+Pydantic model で同じ JSON を検証することで、HTTP、認証、ジョブ起動の前に
+データ契約の一致を確認する。
+
 ## Phase 4: リプレイ体験
 
 学習中のロボット挙動は、動画ではなく Replay Log として扱う。
