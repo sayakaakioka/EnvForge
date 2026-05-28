@@ -8,6 +8,8 @@ Prioritize AGENTS.md in the codex folder of Google Drive above everything else.
 
 A client platform for designing environments and agents, and interacting with embodied AI systems.
 
+For sub-agent orchestration, read `docs/implementation/subagent-workflow.md`.
+
 ## Branch Notice
 
 This repository currently contains a separate experimental branch of the original EnvForge idea. The current Unity work focuses on a local-first navigation experiment foundation rather than the original client/backend workflow.
