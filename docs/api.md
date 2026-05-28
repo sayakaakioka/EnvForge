@@ -1,11 +1,11 @@
 # API Notes
 
-EnvForge talks to the backend through JSON over HTTP, plus an optional WebSocket
-notification channel for training status updates.
+EnvForge talks to EmbodiedLab through JSON over HTTP. The current contract path is
+Scenario Bundle in, Result Bundle and Replay Log out.
 
 The actual endpoint URLs are configured in Unity with an `ApiSettings`
-ScriptableObject. The local `ApiSettings.asset` should not be committed while
-the backend is publicly reachable without abuse protection.
+ScriptableObject. Local API settings assets should not be committed while the
+backend is publicly reachable without abuse protection.
 
 ## Unity Configuration
 
@@ -17,9 +17,10 @@ Create > EnvForge > API Settings
 
 Configure these fields:
 
-- `Base Url`: HTTP API base URL, without a required trailing slash. - `WebSocket
-  Url Template`: WebSocket URL containing `{submission_id}`. - `Model Download
-  Directory Name`: local folder name below `Application.persistentDataPath`.
+- `Base Url`: HTTP API base URL, without a required trailing slash.
+- `WebSocket Url Template`: WebSocket URL containing `{submission_id}`.
+- `Model Download Directory Name`: local folder name below
+  `Application.persistentDataPath`.
 
 Example URL template shape:
 
@@ -27,7 +28,7 @@ Example URL template shape:
 wss://example.com/ws/results/{submission_id}
 ```
 
-## Submit
+## Submit Scenario
 
 ```http
 POST /submissions
@@ -35,26 +36,94 @@ Content-Type: application/json
 Accept: application/json
 ```
 
-Request body:
+The request body is a Scenario Bundle. Its current source of truth is the
+EmbodiedLab Pydantic `ScenarioBundle` model.
+
+Minimal shape:
 
 ```json
 {
-  "environment": {
-    "size": [4, 4],
-    "obstacles": [
-      { "x": 1, "y": 1 }
-    ],
-    "goal": { "x": 3, "y": 3 },
-    "robot_start": { "x": 0, "y": 0 }
+  "schema_version": "scenario-bundle.v0",
+  "scenario_id": "navigation_default",
+  "created_by": {
+    "tool": "EnvForge",
+    "version": "0.1.0"
+  },
+  "compatibility": {
+    "envforge_min_version": "0.1.0",
+    "robot_version": "simple_robot.v0",
+    "sensor_version": "basic_sensors.v0"
+  },
+  "world": {
+    "coordinate_system": "envforge_xz_meters",
+    "bounds": {
+      "min": { "x": -5.0, "z": -5.0 },
+      "max": { "x": 5.0, "z": 5.0 }
+    },
+    "static_walls": [],
+    "static_obstacles": [],
+    "goal": {
+      "id": "goal_001",
+      "position": { "x": 4.0, "z": 4.0 },
+      "radius": 0.5
+    }
   },
   "robot": {
-    "type": "simple"
+    "type": "simple_robot",
+    "start_pose": {
+      "position": { "x": -4.0, "z": -4.0 },
+      "rotation_y_degrees": 0.0
+    },
+    "action_space": {
+      "type": "continuous",
+      "layout": ["forward", "turn"]
+    }
+  },
+  "sensors": [
+    {
+      "id": "front_camera",
+      "type": "forward_camera",
+      "width": 84,
+      "height": 84,
+      "semantic_mode": "traversable_vs_blocked"
+    },
+    {
+      "id": "front_distance",
+      "type": "distance_sensor",
+      "range_meters": 5.0,
+      "direction": "forward"
+    }
+  ],
+  "reward": {
+    "components": [
+      {
+        "name": "goal_reached",
+        "type": "terminal_reward",
+        "weight": 10.0
+      },
+      {
+        "name": "goal_progress",
+        "type": "distance_delta",
+        "target": "goal_001",
+        "weight": 0.5
+      },
+      {
+        "name": "collision_penalty",
+        "type": "collision",
+        "weight": -5.0
+      },
+      {
+        "name": "step_penalty",
+        "type": "per_step",
+        "weight": -0.01
+      }
+    ]
   },
   "training": {
     "algorithm": "ppo",
     "timesteps": 5000,
     "seed": 10,
-    "max_steps": 50,
+    "max_episode_steps": 512,
     "n_steps": 32,
     "batch_size": 32,
     "gamma": 0.99,
@@ -115,7 +184,15 @@ Accept: application/json
 
 Result states:
 
-- `queued` - `starting` - `running` - `completed` - `failed`
+- `queued`
+- `starting`
+- `running`
+- `completed`
+- `failed`
+
+EmbodiedLab stores the EnvForge-facing result under `result_bundle`. Unity should
+prefer `result_bundle` when it is present and treat the legacy top-level
+`summary`, `artifacts`, and `error` fields as transport/status context.
 
 Example completed response:
 
@@ -129,50 +206,89 @@ Example completed response:
     "total_steps": 5000,
     "message": "Training completed"
   },
-  "summary": {
-    "policy": "ppo",
-    "score": 0.95,
-    "grid_width": 4,
-    "grid_height": 4,
-    "episodes": 20,
-    "obstacle_count": 1,
-    "goal": { "x": 3, "y": 3 },
-    "robot_start": { "x": 0, "y": 0 },
-    "robot_type": "simple",
-    "success_rate": 1.0,
-    "avg_reward": 0.95,
-    "avg_steps": 6.1,
-    "training_timesteps": 5000,
-    "training_seed": 10
-  },
-  "error": null,
-  "artifacts": {
-    "model": {
-      "storage": "gcs",
-      "bucket": "my-model-bucket",
-      "path": "models/submission-123/policy.zip"
+  "result_bundle": {
+    "schema_version": "result-bundle.v0",
+    "scenario_id": "navigation_default",
+    "job_id": "submission-123",
+    "status": "completed",
+    "compatibility": {
+      "scenario_schema_version": "scenario-bundle.v0",
+      "envforge_min_version": "0.1.0",
+      "robot_version": "simple_robot.v0",
+      "sensor_version": "basic_sensors.v0",
+      "action_layout": ["forward", "turn"],
+      "observation_layout": ["front_camera", "front_distance"]
     },
-    "onnx_model": {
-      "storage": "gcs",
-      "bucket": "my-model-bucket",
-      "path": "models/submission-123/policy.onnx"
+    "summary": {
+      "training_timesteps": 5000,
+      "training_seed": 10,
+      "success_rate": 0.82,
+      "average_episode_reward": 6.4,
+      "average_episode_steps": 118.5
     },
-    "sentis_model": {
-      "storage": "gcs",
-      "bucket": "my-model-bucket",
-      "path": "models/submission-123/policy.sentis.onnx",
-      "format": "onnx",
-      "target": "unity-sentis",
-      "opset_version": 15
-    }
+    "artifacts": {
+      "model": {
+        "storage": "gcs",
+        "bucket": "embodiedlab-models",
+        "path": "results/submission-123/model/policy.onnx",
+        "format": "onnx"
+      },
+      "replay_log": {
+        "storage": "gcs",
+        "bucket": "embodiedlab-models",
+        "path": "results/submission-123/replay/replay.jsonl",
+        "format": "jsonl"
+      }
+    },
+    "error": null
   },
-  "updated_at": "2026-04-24T12:34:56.000000+00:00"
+  "updated_at": "2026-05-28T12:34:56.000000+00:00"
 }
 ```
 
-When `GET /results/{submission_id}` returns JSON, Unity logs the raw JSON as a
-normal log. If the JSON cannot be retrieved or parsed, Unity treats it as an
-error.
+## Replay Log
+
+Replay Log is a JSON Lines artifact referenced by
+`result_bundle.artifacts.replay_log`. Each line is one `replay-log.v0` step.
+
+Example line:
+
+```json
+{
+  "schema_version": "replay-log.v0",
+  "scenario_id": "navigation_default",
+  "job_id": "submission-123",
+  "episode_id": "episode_0001",
+  "step_index": 1,
+  "time_seconds": 0.1,
+  "robot": {
+    "position": { "x": -3.98, "z": -4.0 },
+    "rotation_y_degrees": 0.0
+  },
+  "action": {
+    "forward": 0.2,
+    "turn": 0.0
+  },
+  "reward": {
+    "total": 0.04,
+    "components": {
+      "goal_progress": 0.05,
+      "step_penalty": -0.01
+    }
+  },
+  "events": [],
+  "sensors": {
+    "front_distance": 5.0
+  },
+  "terminated": false,
+  "termination_reason": null
+}
+```
+
+EnvForge should replay this structured log locally rather than depending on
+video output. The first replay implementation can support the fixed v0 action
+keys and known sensor summaries, then move to a custom parser if arbitrary
+reward component names become necessary.
 
 ## WebSocket Notifications
 
@@ -185,31 +301,30 @@ result responses.
 
 Expected flow:
 
-1. User submits a map and training settings. 2. User starts training. 3. Unity
-   connects to the WebSocket URL for the returned `submission_id`. 4. Server
-   sends `queued`, `starting`, `running`, `completed`, or `failed` result JSON.
-   5. On `completed`, Unity downloads the ONNX model artifact when available.
+1. User submits a Scenario Bundle.
+2. User starts training.
+3. Unity connects to the WebSocket URL for the returned `submission_id`.
+4. Server sends `queued`, `starting`, `running`, `completed`, or `failed` result
+   JSON.
+5. On `completed`, Unity downloads the model and Replay Log artifacts when
+   available.
 
-If the WebSocket URL is missing or the connection fails, Unity falls back to
-HTTP polling when auto polling is enabled.
+If the WebSocket URL is missing or the connection fails, Unity falls back to HTTP
+polling when auto polling is enabled.
 
-## Model Artifacts
-
-Current Unity behavior uses ONNX Runtime Unity for local policy inference. It
-accepts ONNX artifacts from `artifacts.sentis_model`, `artifacts.onnx_model`, or
-`artifacts.model`, as long as the artifact has `format: "onnx"` or a `.onnx`
-path.
+## Artifact Download
 
 Unity supports direct download from:
 
-- Public HTTP or HTTPS artifact paths. - Public Google Cloud Storage objects
-  represented as:
+- Public HTTP or HTTPS artifact paths.
+- Public Google Cloud Storage objects represented as:
 
 ```json
 {
   "storage": "gcs",
-  "bucket": "my-model-bucket",
-  "path": "models/submission-123/policy.onnx"
+  "bucket": "embodiedlab-models",
+  "path": "results/submission-123/model/policy.onnx",
+  "format": "onnx"
 }
 ```
 
@@ -223,12 +338,6 @@ This requires the object to be publicly readable. If the bucket/object is
 private, the backend should return a signed download URL or expose a server-side
 download endpoint.
 
-For Unity playback, the ONNX model should be exported with an ONNX Runtime
-compatible graph. The current server convention may return this as
-`artifacts.sentis_model` with `format: "onnx"` and a path such as
-`policy.sentis.onnx`; despite the field name, Unity treats it as an ONNX Runtime
-model.
-
 Downloaded files are saved below:
 
 ```text
@@ -238,18 +347,14 @@ Application.persistentDataPath/{Model Download Directory Name}/
 For example, an artifact path of:
 
 ```text
-models/submission-123/policy.sentis.onnx
+results/submission-123/model/policy.onnx
 ```
 
 is saved as:
 
 ```text
-Application.persistentDataPath/Models/models/submission-123/policy.sentis.onnx
+Application.persistentDataPath/Models/results/submission-123/model/policy.onnx
 ```
-
-After the `.onnx` file is downloaded, `RobotPolicyPlayer` loads it with ONNX
-Runtime Unity, builds an observation from the current grid state, predicts an
-action, and moves a visible robot one grid cell per inference step.
 
 ## Public Repository Safety
 
@@ -259,8 +364,8 @@ rate limit, or job abuse protection.
 The repository `.gitignore` should keep these local files out of Git:
 
 ```text
-unity/EnvForge/Assets/Settings/ApiSettings.asset
-unity/EnvForge/Assets/Settings/ApiSettings.asset.meta
+unity/EnvForge-local-first/Assets/Settings/ApiSettings.asset
+unity/EnvForge-local-first/Assets/Settings/ApiSettings.asset.meta
 ```
 
 Endpoint URLs are not secrets by themselves, but publishing live unauthenticated

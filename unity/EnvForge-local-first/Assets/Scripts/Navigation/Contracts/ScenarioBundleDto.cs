@@ -132,6 +132,12 @@ namespace EnvForge.Navigation.Contracts
         public int timesteps;
         public int seed;
         public int max_episode_steps;
+        public int n_steps;
+        public int batch_size;
+        public float gamma;
+        public float learning_rate;
+        public float ent_coef;
+        public int eval_episodes;
     }
 
     [Serializable]
@@ -139,5 +145,81 @@ namespace EnvForge.Navigation.Contracts
     {
         public float x;
         public float z;
+    }
+
+    [Serializable]
+    public sealed class ResultBundleDto
+    {
+        public string schema_version;
+        public string scenario_id;
+        public string job_id;
+        public string status;
+        public ResultCompatibilityDto compatibility;
+        public TrainingSummaryDto summary;
+        public ResultArtifactsDto artifacts;
+        public ErrorReportDto error;
+    }
+
+    [Serializable]
+    public sealed class ResultDocumentDto
+    {
+        public string submission_id;
+        public string status;
+        public ProgressDto progress;
+        public ResultBundleDto result_bundle;
+        public string updated_at;
+    }
+
+    [Serializable]
+    public sealed class ProgressDto
+    {
+        public string phase;
+        public int current_step;
+        public int total_steps;
+        public string message;
+    }
+
+    [Serializable]
+    public sealed class ResultCompatibilityDto
+    {
+        public string scenario_schema_version;
+        public string envforge_min_version;
+        public string robot_version;
+        public string sensor_version;
+        public List<string> action_layout;
+        public List<string> observation_layout;
+    }
+
+    [Serializable]
+    public sealed class TrainingSummaryDto
+    {
+        public int training_timesteps;
+        public int training_seed;
+        public float success_rate;
+        public float average_episode_reward;
+        public float average_episode_steps;
+    }
+
+    [Serializable]
+    public sealed class ResultArtifactsDto
+    {
+        public ArtifactLocationDto model;
+        public ArtifactLocationDto replay_log;
+    }
+
+    [Serializable]
+    public sealed class ArtifactLocationDto
+    {
+        public string storage;
+        public string bucket;
+        public string path;
+        public string format;
+    }
+
+    [Serializable]
+    public sealed class ErrorReportDto
+    {
+        public string message;
+        public string details;
     }
 }

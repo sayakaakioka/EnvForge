@@ -120,6 +120,12 @@ namespace EnvForge.Navigation.Contracts
                     timesteps = source.TrainingTimesteps,
                     seed = source.Seed,
                     max_episode_steps = source.MaxEpisodeSteps,
+                    n_steps = 32,
+                    batch_size = 32,
+                    gamma = 0.99f,
+                    learning_rate = 0.0003f,
+                    ent_coef = 0.0f,
+                    eval_episodes = 20,
                 },
             };
         }

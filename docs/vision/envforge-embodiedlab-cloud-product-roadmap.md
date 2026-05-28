@@ -58,10 +58,11 @@ Result Bundle は、EmbodiedLab が返す学習結果を表す。
 Replay Log は、動画ではなく構造化ログとして保存する。 EnvForge
 バイナリがこれを読み、視点変更や一時停止を含む ローカル再生を行う。
 
-## Phase 2: EmbodiedLab の入力モデル拡張
+## Phase 2: Scenario Bundle 主経路の整合
 
-EmbodiedLab は現在、grid-world 形式の入力を受け取る。 次の段階では、EnvForge の
-Scenario Bundle を受け取れるようにする。
+EmbodiedLab は Scenario Bundle を API 境界として受け取る方針に移行した。
+次の段階では、EnvForge 側の DTO、API ドキュメント、Replay Log 受信境界を
+EmbodiedLab 側の Pydantic model に追従させる。
 
 ただし、EmbodiedLab が Unity や ML-Agents を実行する必要はない。
 重要なのは、EnvForge で定義された学習条件を、
@@ -72,6 +73,12 @@ Scenario Bundle を受け取れるようにする。
 - 静的な壁 - 静的な障害物 - 1 種類のロボット - 正面カメラ 1 台の抽象表現 -
   距離センサ 1 つの抽象表現 - ゴール到達と衝突による終了条件 - 宣言的な reward
   component
+
+Phase 2 の作業順序は以下とする。
+
+1. EmbodiedLab の Pydantic model を source of truth として EnvForge DTO を同期する。
+2. 古い grid-world / `models/<submission_id>/` 前提の文書を更新する。
+3. Result Bundle と Replay Log の受信・再生境界を EnvForge 側に追加する。
 
 ## Phase 3: EnvForge 側のクラウド送信導線
 

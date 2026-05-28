@@ -67,9 +67,11 @@ Training from the WSL2 mirror:
 ```bash
 cd ~/dev/EnvForge-mlagents
 
-cp /mnt/c/Users/sayak/dev/EnvForge/configs/ml-agents/navigation-final.yaml configs/ml-agents/
-cp /mnt/c/Users/sayak/dev/EnvForge/scripts/train-navigation-final.sh scripts/
-cp -r /mnt/c/Users/sayak/dev/EnvForge/python/envforge_mlagents python/
+ENVFORGE_ROOT=/mnt/c/path/to/EnvForge
+
+cp "$ENVFORGE_ROOT/configs/ml-agents/navigation-final.yaml" configs/ml-agents/
+cp "$ENVFORGE_ROOT/scripts/train-navigation-final.sh" scripts/
+cp -r "$ENVFORGE_ROOT/python/envforge_mlagents" python/
 
 bash scripts/train-navigation-final.sh
 ```
@@ -172,11 +174,13 @@ mirror that contains only the Python and trainer files:
 mkdir -p ~/dev/EnvForge-mlagents
 cd ~/dev/EnvForge-mlagents
 
-cp /mnt/c/Users/sayak/dev/EnvForge/pyproject.toml .
-cp /mnt/c/Users/sayak/dev/EnvForge/uv.lock .
+ENVFORGE_ROOT=/mnt/c/path/to/EnvForge
+
+cp "$ENVFORGE_ROOT/pyproject.toml" .
+cp "$ENVFORGE_ROOT/uv.lock" .
 mkdir -p configs scripts
-cp -r /mnt/c/Users/sayak/dev/EnvForge/configs/ml-agents configs/
-cp /mnt/c/Users/sayak/dev/EnvForge/scripts/train-mvp1.sh scripts/
+cp -r "$ENVFORGE_ROOT/configs/ml-agents" configs/
+cp "$ENVFORGE_ROOT/scripts/train-mvp1.sh" scripts/
 
 uv python install 3.10.12
 uv sync --python 3.10.12
@@ -231,10 +235,12 @@ Training from the WSL2 mirror:
 ```bash
 cd ~/dev/EnvForge-mlagents
 
+ENVFORGE_ROOT=/mnt/c/path/to/EnvForge
+
 cp \
-  /mnt/c/Users/sayak/dev/EnvForge/configs/ml-agents/mvp2-visual-navigation.yaml \
+  "$ENVFORGE_ROOT/configs/ml-agents/mvp2-visual-navigation.yaml" \
   configs/ml-agents/
-cp /mnt/c/Users/sayak/dev/EnvForge/scripts/train-mvp2.sh scripts/
+cp "$ENVFORGE_ROOT/scripts/train-mvp2.sh" scripts/
 
 bash scripts/train-mvp2.sh
 ```
@@ -335,11 +341,12 @@ Training from the WSL2 mirror:
 ```bash
 cd ~/dev/EnvForge-mlagents
 
-SRC=/mnt/c/Users/sayak/dev/EnvForge/configs/ml-agents
+ENVFORGE_ROOT=/mnt/c/path/to/EnvForge
+SRC="$ENVFORGE_ROOT/configs/ml-agents"
 cp \
   "$SRC/mvp3-custom-cnn-navigation.yaml" \
   configs/ml-agents/
-cp /mnt/c/Users/sayak/dev/EnvForge/scripts/train-mvp3.sh scripts/
+cp "$ENVFORGE_ROOT/scripts/train-mvp3.sh" scripts/
 
 bash scripts/train-mvp3.sh
 ```
@@ -378,12 +385,13 @@ Copy the strict trainer files into the WSL2 mirror:
 cd ~/dev/EnvForge-mlagents
 
 mkdir -p python configs/ml-agents scripts
-cp -r /mnt/c/Users/sayak/dev/EnvForge/python/envforge_mlagents python/
-SRC=/mnt/c/Users/sayak/dev/EnvForge/configs/ml-agents
+ENVFORGE_ROOT=/mnt/c/path/to/EnvForge
+cp -r "$ENVFORGE_ROOT/python/envforge_mlagents" python/
+SRC="$ENVFORGE_ROOT/configs/ml-agents"
 cp \
   "$SRC/mvp3-strict-custom-cnn-navigation.yaml" \
   configs/ml-agents/
-cp /mnt/c/Users/sayak/dev/EnvForge/scripts/train-mvp3-strict.sh scripts/
+cp "$ENVFORGE_ROOT/scripts/train-mvp3-strict.sh" scripts/
 ```
 
 Run:

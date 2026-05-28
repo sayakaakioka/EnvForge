@@ -1,7 +1,6 @@
 import os
-from typing import List, Optional, Tuple
 
-from mlagents.torch_utils import torch, nn
+from mlagents.torch_utils import nn, torch
 from mlagents.trainers.buffer import AgentBuffer
 from mlagents.trainers.exception import UnityTrainerException
 from mlagents.trainers.settings import NetworkSettings
@@ -69,13 +68,15 @@ class SigmoidGateLayer(nn.Module):
 class StrictNavigationNetworkBody(nn.Module):
     def __init__(
         self,
-        observation_specs: List[ObservationSpec],
+        observation_specs: list[ObservationSpec],
         network_settings: NetworkSettings,
         encoded_act_size: int = 0,
     ):
         super().__init__()
         if network_settings.memory is not None:
-            raise UnityTrainerException("Strict navigation does not support recurrent memory.")
+            raise UnityTrainerException(
+                "Strict navigation does not support recurrent memory."
+            )
         if encoded_act_size != 0:
             raise UnityTrainerException(
                 "Strict navigation does not support action-conditioned network bodies."
@@ -97,7 +98,8 @@ class StrictNavigationNetworkBody(nn.Module):
         vector_size = vector_spec.shape[0]
         if self.h_size != 256 or vector_size != 2:
             raise UnityTrainerException(
-                "Strict navigation expects hidden_units=256 and a 2-value vector observation."
+                "Strict navigation expects hidden_units=256 and a 2-value vector "
+                "observation."
             )
 
         self.visual_encoder = StrictNavigationVisualEncoder(
@@ -117,13 +119,14 @@ class StrictNavigationNetworkBody(nn.Module):
 
     @staticmethod
     def _resolve_observation_specs(
-        observation_specs: List[ObservationSpec],
-    ) -> Tuple[ObservationSpec, ObservationSpec]:
+        observation_specs: list[ObservationSpec],
+    ) -> tuple[ObservationSpec, ObservationSpec]:
         visual_specs = [spec for spec in observation_specs if len(spec.shape) == 3]
         vector_specs = [spec for spec in observation_specs if len(spec.shape) == 1]
         if len(visual_specs) != 1 or len(vector_specs) != 1:
             raise UnityTrainerException(
-                "Strict navigation expects exactly one visual observation and one vector observation."
+                "Strict navigation expects exactly one visual observation and one "
+                "vector observation."
             )
         return visual_specs[0], vector_specs[0]
 
@@ -144,11 +147,11 @@ class StrictNavigationNetworkBody(nn.Module):
 
     def forward(
         self,
-        inputs: List[torch.Tensor],
-        actions: Optional[torch.Tensor] = None,
-        memories: Optional[torch.Tensor] = None,
+        inputs: list[torch.Tensor],
+        actions: torch.Tensor | None = None,
+        memories: torch.Tensor | None = None,
         sequence_length: int = 1,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if actions is not None:
             raise UnityTrainerException(
                 "Strict navigation does not support action-conditioned forward passes."
@@ -159,7 +162,9 @@ class StrictNavigationNetworkBody(nn.Module):
 
         image_features = self.visual_encoder(visual_input)
         numeric_features = self.vector_input(inputs[self._vector_index])
-        encoding = self._body_encoder(torch.cat([image_features, numeric_features], dim=1))
+        encoding = self._body_encoder(
+            torch.cat([image_features, numeric_features], dim=1)
+        )
         return encoding, memories
 
     def _log_image_stats(self, visual_input: torch.Tensor) -> None:
@@ -167,7 +172,10 @@ class StrictNavigationNetworkBody(nn.Module):
             return
 
         self._forward_count += 1
-        if self._forward_count != 1 and self._forward_count % self._image_stats_interval != 0:
+        if (
+            self._forward_count != 1
+            and self._forward_count % self._image_stats_interval != 0
+        ):
             return
 
         with torch.no_grad():

@@ -1,9 +1,9 @@
-from typing import Any, List, Optional
+from typing import Any
 
 from mlagents.torch_utils import torch
+from mlagents.trainers.torch_entities import networks
 from mlagents.trainers.torch_entities.action_model import ActionModel
 from mlagents.trainers.torch_entities.agent_action import AgentAction
-from mlagents.trainers.torch_entities import networks
 from mlagents.trainers.torch_entities.networks import SimpleActor
 from mlagents.trainers.torch_entities.utils import ModelUtils
 from mlagents_envs.base_env import ActionSpec, ActionTuple
@@ -21,13 +21,17 @@ def apply_navigation_strict_patch() -> None:
     SimpleActor.get_action_and_stats = _strict_get_action_and_stats
     print(
         "EnvForge strict patch: "
-        f"networks.NetworkBody is StrictNavigationNetworkBody -> {networks.NetworkBody is StrictNavigationNetworkBody}"
+        "networks.NetworkBody is StrictNavigationNetworkBody -> "
+        f"{networks.NetworkBody is StrictNavigationNetworkBody}"
     )
 
 
 def _strict_simple_actor_init(self: SimpleActor, *args: Any, **kwargs: Any) -> None:
     observation_specs = kwargs.get("observation_specs", args[0] if args else None)
-    network_settings = kwargs.get("network_settings", args[1] if len(args) > 1 else None)
+    network_settings = kwargs.get(
+        "network_settings",
+        args[1] if len(args) > 1 else None,
+    )
     action_spec = kwargs.get("action_spec", args[2] if len(args) > 2 else None)
     conditional_sigma = kwargs.get(
         "conditional_sigma",
@@ -48,9 +52,9 @@ def _strict_simple_actor_init(self: SimpleActor, *args: Any, **kwargs: Any) -> N
 
 def _strict_get_action_and_stats(
     self: SimpleActor,
-    inputs: List[torch.Tensor],
-    masks: Optional[torch.Tensor] = None,
-    memories: Optional[torch.Tensor] = None,
+    inputs: list[torch.Tensor],
+    masks: torch.Tensor | None = None,
+    memories: torch.Tensor | None = None,
     sequence_length: int = 1,
 ) -> Any:
     if not isinstance(self.action_model, StrictNavigationActionModel):
@@ -84,9 +88,19 @@ def _print_model_report_once(actor: SimpleActor, observation_specs: Any) -> None
     _MODEL_REPORT_PRINTED = True
     network_body = actor.network_body
     print("EnvForge strict model report:")
-    print(f"- networks.NetworkBody is StrictNavigationNetworkBody: {networks.NetworkBody is StrictNavigationNetworkBody}")
-    print(f"- actor.network_body class: {network_body.__class__.__module__}.{network_body.__class__.__name__}")
-    print(f"- actor.action_model class: {actor.action_model.__class__.__module__}.{actor.action_model.__class__.__name__}")
+    print(
+        "- networks.NetworkBody is StrictNavigationNetworkBody: "
+        f"{networks.NetworkBody is StrictNavigationNetworkBody}"
+    )
+    print(
+        "- actor.network_body class: "
+        f"{network_body.__class__.__module__}.{network_body.__class__.__name__}"
+    )
+    print(
+        "- actor.action_model class: "
+        f"{actor.action_model.__class__.__module__}."
+        f"{actor.action_model.__class__.__name__}"
+    )
     print("- actor.network_body module:")
     print(network_body)
 
@@ -95,7 +109,8 @@ def _print_model_report_once(actor: SimpleActor, observation_specs: Any) -> None
     network_body.image_stats_enabled = False
     output, memory = network_body(smoke_inputs)
     network_body.image_stats_enabled = was_image_stats_enabled
-    print(f"- forward smoke input shapes: {[tuple(input_tensor.shape) for input_tensor in smoke_inputs]}")
+    input_shapes = [tuple(input_tensor.shape) for input_tensor in smoke_inputs]
+    print(f"- forward smoke input shapes: {input_shapes}")
     print(f"- forward smoke output shape: {tuple(output.shape)}")
     print(f"- forward smoke memory: {memory}")
 
@@ -103,7 +118,10 @@ def _print_model_report_once(actor: SimpleActor, observation_specs: Any) -> None
     continuous_output = action_outputs[0]
     deterministic_continuous_output = action_outputs[3]
     if continuous_output is not None:
-        print(f"- strict action smoke output: {continuous_output.detach().cpu().tolist()}")
+        print(
+            "- strict action smoke output: "
+            f"{continuous_output.detach().cpu().tolist()}"
+        )
     if deterministic_continuous_output is not None:
         print(
             "- strict deterministic action smoke output: "
@@ -121,7 +139,9 @@ class StrictNavigationActionModel(ActionModel):
         deterministic: bool = False,
     ):
         if action_spec.continuous_size != 2 or action_spec.discrete_size != 0:
-            raise ValueError("Strict navigation expects exactly two continuous actions.")
+            raise ValueError(
+                "Strict navigation expects exactly two continuous actions."
+            )
 
         super().__init__(
             hidden_size,

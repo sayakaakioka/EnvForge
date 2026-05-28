@@ -8,5 +8,15 @@ namespace EnvForge.Navigation.Contracts
         {
             return JsonUtility.ToJson(scenarioBundle, prettyPrint);
         }
+
+        public static ResultBundleDto FromResultBundleJson(string json)
+        {
+            return JsonUtility.FromJson<ResultBundleDto>(json);
+        }
+
+        public static ResultDocumentDto FromResultDocumentJson(string json)
+        {
+            return JsonUtility.FromJson<ResultDocumentDto>(json);
+        }
     }
 }
