@@ -1,8 +1,11 @@
 # API Notes
 
-EnvForge talks to the backend through JSON over HTTP, plus an optional WebSocket notification channel for training status updates.
+EnvForge talks to the backend through JSON over HTTP, plus an optional WebSocket
+notification channel for training status updates.
 
-The actual endpoint URLs are configured in Unity with an `ApiSettings` ScriptableObject. The local `ApiSettings.asset` should not be committed while the backend is publicly reachable without abuse protection.
+The actual endpoint URLs are configured in Unity with an `ApiSettings`
+ScriptableObject. The local `ApiSettings.asset` should not be committed while
+the backend is publicly reachable without abuse protection.
 
 ## Unity Configuration
 
@@ -14,9 +17,9 @@ Create > EnvForge > API Settings
 
 Configure these fields:
 
-- `Base Url`: HTTP API base URL, without a required trailing slash.
-- `WebSocket Url Template`: WebSocket URL containing `{submission_id}`.
-- `Model Download Directory Name`: local folder name below `Application.persistentDataPath`.
+- `Base Url`: HTTP API base URL, without a required trailing slash. - `WebSocket
+  Url Template`: WebSocket URL containing `{submission_id}`. - `Model Download
+  Directory Name`: local folder name below `Application.persistentDataPath`.
 
 Example URL template shape:
 
@@ -112,11 +115,7 @@ Accept: application/json
 
 Result states:
 
-- `queued`
-- `starting`
-- `running`
-- `completed`
-- `failed`
+- `queued` - `starting` - `running` - `completed` - `failed`
 
 Example completed response:
 
@@ -171,32 +170,40 @@ Example completed response:
 }
 ```
 
-When `GET /results/{submission_id}` returns JSON, Unity logs the raw JSON as a normal log. If the JSON cannot be retrieved or parsed, Unity treats it as an error.
+When `GET /results/{submission_id}` returns JSON, Unity logs the raw JSON as a
+normal log. If the JSON cannot be retrieved or parsed, Unity treats it as an
+error.
 
 ## WebSocket Notifications
 
-After training starts successfully, Unity opens the configured WebSocket URL if `WebSocket Url Template` is set.
+After training starts successfully, Unity opens the configured WebSocket URL if
+`WebSocket Url Template` is set.
 
-The server should send JSON messages with the same shape as `GET /results/{submission_id}`. Unity handles these messages the same way as HTTP result responses.
+The server should send JSON messages with the same shape as `GET
+/results/{submission_id}`. Unity handles these messages the same way as HTTP
+result responses.
 
 Expected flow:
 
-1. User submits a map and training settings.
-2. User starts training.
-3. Unity connects to the WebSocket URL for the returned `submission_id`.
-4. Server sends `queued`, `starting`, `running`, `completed`, or `failed` result JSON.
-5. On `completed`, Unity downloads the ONNX model artifact when available.
+1. User submits a map and training settings. 2. User starts training. 3. Unity
+   connects to the WebSocket URL for the returned `submission_id`. 4. Server
+   sends `queued`, `starting`, `running`, `completed`, or `failed` result JSON.
+   5. On `completed`, Unity downloads the ONNX model artifact when available.
 
-If the WebSocket URL is missing or the connection fails, Unity falls back to HTTP polling when auto polling is enabled.
+If the WebSocket URL is missing or the connection fails, Unity falls back to
+HTTP polling when auto polling is enabled.
 
 ## Model Artifacts
 
-Current Unity behavior uses ONNX Runtime Unity for local policy inference. It accepts ONNX artifacts from `artifacts.sentis_model`, `artifacts.onnx_model`, or `artifacts.model`, as long as the artifact has `format: "onnx"` or a `.onnx` path.
+Current Unity behavior uses ONNX Runtime Unity for local policy inference. It
+accepts ONNX artifacts from `artifacts.sentis_model`, `artifacts.onnx_model`, or
+`artifacts.model`, as long as the artifact has `format: "onnx"` or a `.onnx`
+path.
 
 Unity supports direct download from:
 
-- Public HTTP or HTTPS artifact paths.
-- Public Google Cloud Storage objects represented as:
+- Public HTTP or HTTPS artifact paths. - Public Google Cloud Storage objects
+  represented as:
 
 ```json
 {
@@ -212,9 +219,15 @@ For GCS, Unity constructs:
 https://storage.googleapis.com/{bucket}/{path}
 ```
 
-This requires the object to be publicly readable. If the bucket/object is private, the backend should return a signed download URL or expose a server-side download endpoint.
+This requires the object to be publicly readable. If the bucket/object is
+private, the backend should return a signed download URL or expose a server-side
+download endpoint.
 
-For Unity playback, the ONNX model should be exported with an ONNX Runtime compatible graph. The current server convention may return this as `artifacts.sentis_model` with `format: "onnx"` and a path such as `policy.sentis.onnx`; despite the field name, Unity treats it as an ONNX Runtime model.
+For Unity playback, the ONNX model should be exported with an ONNX Runtime
+compatible graph. The current server convention may return this as
+`artifacts.sentis_model` with `format: "onnx"` and a path such as
+`policy.sentis.onnx`; despite the field name, Unity treats it as an ONNX Runtime
+model.
 
 Downloaded files are saved below:
 
@@ -234,11 +247,14 @@ is saved as:
 Application.persistentDataPath/Models/models/submission-123/policy.sentis.onnx
 ```
 
-After the `.onnx` file is downloaded, `RobotPolicyPlayer` loads it with ONNX Runtime Unity, builds an observation from the current grid state, predicts an action, and moves a visible robot one grid cell per inference step.
+After the `.onnx` file is downloaded, `RobotPolicyPlayer` loads it with ONNX
+Runtime Unity, builds an observation from the current grid state, predicts an
+action, and moves a visible robot one grid cell per inference step.
 
 ## Public Repository Safety
 
-Do not commit local API settings while the backend has no authentication, quota, rate limit, or job abuse protection.
+Do not commit local API settings while the backend has no authentication, quota,
+rate limit, or job abuse protection.
 
 The repository `.gitignore` should keep these local files out of Git:
 
@@ -247,4 +263,6 @@ unity/EnvForge/Assets/Settings/ApiSettings.asset
 unity/EnvForge/Assets/Settings/ApiSettings.asset.meta
 ```
 
-Endpoint URLs are not secrets by themselves, but publishing live unauthenticated endpoints can invite unwanted training jobs and backend cost. Never commit API keys, bearer tokens, signed URLs, or private endpoints.
+Endpoint URLs are not secrets by themselves, but publishing live unauthenticated
+endpoints can invite unwanted training jobs and backend cost. Never commit API
+keys, bearer tokens, signed URLs, or private endpoints.

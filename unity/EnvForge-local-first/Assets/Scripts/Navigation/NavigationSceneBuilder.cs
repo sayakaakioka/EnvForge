@@ -4,6 +4,7 @@ using Unity.MLAgents.Actuators;
 using Unity.MLAgents.Policies;
 using Unity.MLAgents.Sensors;
 using UnityEngine;
+using EnvForge.Navigation.Contracts;
 
 namespace EnvForge.Navigation
 {
@@ -17,6 +18,7 @@ namespace EnvForge.Navigation
         private const int HiddenFromSegmentationCameraLayer = 2;
         private const int MaxEpisodeSteps = 1000;
         private const string TrainingModeArgument = "--envforge-train";
+        private const string DefaultScenarioId = "navigation_default";
 
         [SerializeField] private Vector2 floorSize = new(16f, 12f);
         [SerializeField] private float wallHeight = 1.8f;
@@ -37,6 +39,16 @@ namespace EnvForge.Navigation
         [SerializeField] private Material goalVisualMaterial;
 
         private bool trainingModeRequested;
+
+        public ScenarioBundleDto BuildScenarioBundle(string scenarioId = DefaultScenarioId)
+        {
+            return NavigationScenarioBundleBuilder.Build(CreateScenarioBundleSource(scenarioId));
+        }
+
+        public string BuildScenarioBundleJson(string scenarioId = DefaultScenarioId, bool prettyPrint = true)
+        {
+            return ScenarioBundleSerializer.ToJson(BuildScenarioBundle(scenarioId), prettyPrint);
+        }
 
         private void Start()
         {
@@ -103,21 +115,18 @@ namespace EnvForge.Navigation
 
         private void CreateBoundaryWalls(Material material, INavigationEpisodeEvents episodeEvents)
         {
-            float halfWidth = floorSize.x * 0.5f;
-            float halfDepth = floorSize.y * 0.5f;
-
-            CreateWall("Navigation Wall North", new Vector3(0f, wallHeight * 0.5f, halfDepth), new Vector3(floorSize.x, wallHeight, wallThickness), material, episodeEvents);
-            CreateWall("Navigation Wall South", new Vector3(0f, wallHeight * 0.5f, -halfDepth), new Vector3(floorSize.x, wallHeight, wallThickness), material, episodeEvents);
-            CreateWall("Navigation Wall East", new Vector3(floorSize.x * 0.5f, wallHeight * 0.5f, 0f), new Vector3(wallThickness, wallHeight, floorSize.y), material, episodeEvents);
-            CreateWall("Navigation Wall West", new Vector3(-halfWidth, wallHeight * 0.5f, 0f), new Vector3(wallThickness, wallHeight, floorSize.y), material, episodeEvents);
+            foreach (NavigationScenarioWallSpec wallSpec in NavigationScenarioLayout.CreateBoundaryWalls(floorSize, wallHeight, wallThickness))
+            {
+                CreateWall(wallSpec, material, episodeEvents);
+            }
         }
 
         private void CreateInnerWalls(Material material, INavigationEpisodeEvents episodeEvents)
         {
-            CreateWall("Navigation Inner Wall A", new Vector3(-1.5f, wallHeight * 0.5f, -1.2f), new Vector3(0.35f, wallHeight, 4.2f), material, episodeEvents);
-            CreateWall("Navigation Inner Wall B", new Vector3(2.8f, wallHeight * 0.5f, 1.6f), new Vector3(4.4f, wallHeight, 0.35f), material, episodeEvents);
-            CreateWall("Navigation Inner Wall C", new Vector3(4.8f, wallHeight * 0.5f, -2.2f), new Vector3(0.35f, wallHeight, 2.5f), material, episodeEvents);
-            CreateWall("Navigation Inner Wall D", new Vector3(-4.2f, wallHeight * 0.5f, 2.2f), new Vector3(2.4f, wallHeight, 0.35f), material, episodeEvents);
+            foreach (NavigationScenarioWallSpec wallSpec in NavigationScenarioLayout.CreateInnerWalls(wallHeight))
+            {
+                CreateWall(wallSpec, material, episodeEvents);
+            }
         }
 
         private GameObject CreateAgent(Material material, Material arrowMaterial)
@@ -265,6 +274,11 @@ namespace EnvForge.Navigation
             reporter.Configure(episodeEvents);
         }
 
+        private void CreateWall(NavigationScenarioWallSpec wallSpec, Material material, INavigationEpisodeEvents episodeEvents)
+        {
+            CreateWall(wallSpec.DisplayName, wallSpec.Center, wallSpec.Size, material, episodeEvents);
+        }
+
         private Camera CreateSegmentationCamera(Transform agent)
         {
             GameObject cameraObject = new("Navigation Segmentation Camera");
@@ -363,6 +377,24 @@ namespace EnvForge.Navigation
             return new Vector2(
                 Mathf.Max(0.5f, floorSize.x * 0.5f - wallThickness - 1f),
                 Mathf.Max(0.5f, floorSize.y * 0.5f - wallThickness - 1f));
+        }
+
+        private NavigationScenarioBundleSource CreateScenarioBundleSource(string scenarioId)
+        {
+            return new NavigationScenarioBundleSource
+            {
+                ScenarioId = scenarioId,
+                FloorSize = floorSize,
+                WallHeight = wallHeight,
+                WallThickness = wallThickness,
+                AgentStartPosition = AgentStartPosition,
+                AgentStartRotation = AgentStartRotation,
+                GoalStartPosition = GoalStartPosition,
+                GoalReachRadius = goalReachRadius,
+                SegmentationImageWidth = SegmentationImageWidth,
+                SegmentationImageHeight = SegmentationImageHeight,
+                MaxEpisodeSteps = MaxEpisodeSteps,
+            };
         }
     }
 }

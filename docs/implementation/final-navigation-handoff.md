@@ -4,7 +4,8 @@
 
 MVP 0からMVP 3までの開発を一旦区切り、他人に渡しやすい最終版の入口を用意する。
 
-これまでのMVPごとのコードは実験履歴として残しつつ、通常の利用者が最初に見るべきコード、シーン上のBootstrap、学習設定、推論モデルを最終版の名前に整理する。
+これまでのMVPごとのコードは実験履歴として残しつつ、通常の利用者が最初に見るべき
+コード、シーン上のBootstrap、学習設定、推論モデルを最終版の名前に整理する。
 
 ## 最終版の入口
 
@@ -16,17 +17,28 @@ unity/EnvForge-local-first/Assets/Scripts/Navigation/
 
 最終版のBootstrapは`SampleScene.unity`内の`NavigationBootstrap`である。
 
-`NavigationBootstrap`には`NavigationSceneBuilder`を付け、既定では以下のONNXモデルを`Inference Model`へ割り当てる。
+`NavigationBootstrap`には`NavigationSceneBuilder`を付け、既定では以下のONNXモデ
+ルを`Inference Model`へ割り当てる。
 
 ```text
 unity/EnvForge-local-first/Assets/Resources/Models/NavigationFinal.onnx
 ```
 
-`Inference Model`が割り当てられている場合は、生成される`BehaviorParameters`を`InferenceOnly`にしてUnity単体で推論実行する。`Inference Model`が空の場合は`BehaviorType.Default`のままにし、Python trainerから接続して学習できる。
+`Inference
+Model`が割り当てられている場合は、生成される`BehaviorParameters`を`InferenceOnly
+`にしてUnity単体で推論実行する。`Inference
+Model`が空の場合は`BehaviorType.Default`のままにし、Python
+trainerから接続して学習できる。
 
-Windows StandaloneのGraphics APIはProjectSettingsでDirect3D 11へ固定する。Snapdragon / Adreno環境ではDirect3D 12実行時にRenderTexture作成失敗からUnity Editorがクラッシュするケースがあったためである。
+Windows StandaloneのGraphics APIはProjectSettingsでDirect3D
+11へ固定する。Snapdragon / Adreno環境ではDirect3D
+12実行時にRenderTexture作成失敗からUnity
+Editorがクラッシュするケースがあったためである。
 
-`Inference Model`が割り当てられている場合は、ML-Agentsの`CommunicatorFactory.Enabled`を`false`にしてからAgentを生成する。これにより、Unity単体推論時にPython trainerへの接続試行を行わない。
+`Inference
+Model`が割り当てられている場合は、ML-Agentsの`CommunicatorFactory.Enabled`を`fal
+se`にしてからAgentを生成する。これにより、Unity単体推論時にPython
+trainerへの接続試行を行わない。
 
 ## 開発履歴の扱い
 
@@ -69,22 +81,28 @@ strict trainerの実装は以下に配置する。
 python/envforge_mlagents/navigation_strict/
 ```
 
-この実装はMVP 3 strict版で検証した構造を継承しているが、最終版利用者が迷わないように最終版名へリネームした。`NavigationFinal`のBehaviorNameとconfigを渡せば、最終版として学習できる。
+この実装はMVP 3
+strict版で検証した構造を継承しているが、最終版利用者が迷わないように最終版名へリ
+ネームした。`NavigationFinal`のBehaviorNameとconfigを渡せば、最終版として学習で
+きる。
 
 ## 到達済み
 
-- 最終版コードを`Assets/Scripts/Navigation/`へ集約した
-- 開発履歴を`Assets/Scripts/DevelopmentHistory/`へ退避した
-- `SampleScene.unity`の有効Bootstrapを`NavigationBootstrap`にした
-- `NavigationFinal.onnx`を最終版の既定推論モデルとして配置した
-- `NavigationFinal`用のML-Agents configとtrain scriptを追加した
-- READMEの冒頭に最終版の起動・推論・学習手順を追加した
-- strict trainer実装を`python/envforge_mlagents/navigation_strict/`へリネームした
-- Windows StandaloneのGraphics APIをDirect3D 11へ固定した
-- 左上のdebug overlayタイトルを最終版名に更新した
-- 推論モデル割り当て時はML-Agents communicatorを無効化し、trainer接続試行を抑止するようにした
+- 最終版コードを`Assets/Scripts/Navigation/`へ集約した -
+  開発履歴を`Assets/Scripts/DevelopmentHistory/`へ退避した -
+  `SampleScene.unity`の有効Bootstrapを`NavigationBootstrap`にした -
+  `NavigationFinal.onnx`を最終版の既定推論モデルとして配置した -
+  `NavigationFinal`用のML-Agents configとtrain scriptを追加した -
+  READMEの冒頭に最終版の起動・推論・学習手順を追加した - strict
+  trainer実装を`python/envforge_mlagents/navigation_strict/`へリネームした -
+  Windows StandaloneのGraphics APIをDirect3D 11へ固定した - 左上のdebug
+  overlayタイトルを最終版名に更新した - 推論モデル割り当て時はML-Agents
+  communicatorを無効化し、trainer接続試行を抑止するようにした
 
 ## 保留
 
-- Unity Editor上で再import後、`NavigationSceneBuilder`のMonoScript参照が正しく解決されることを確認する
-- `NavigationFinal.onnx`が旧BehaviorName由来のexportでも、`NavigationFinal`のBehaviorParameters上で問題なく推論できることを複数episodeで確認する
+- Unity
+  Editor上で再import後、`NavigationSceneBuilder`のMonoScript参照が正しく解決され
+  ることを確認する -
+  `NavigationFinal.onnx`が旧BehaviorName由来のexportでも、`NavigationFinal`のBeh
+  aviorParameters上で問題なく推論できることを複数episodeで確認する

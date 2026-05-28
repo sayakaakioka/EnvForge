@@ -5,20 +5,17 @@
 このフェーズの目的は、EnvForge と EmbodiedLab の接続を
 コードの密結合ではなく、明示的なデータ契約として定義することである。
 
-Phase 0 の基盤整備は完了扱いとし、ここからは以下の 3 つを
-設計対象にする。
+Phase 0 の基盤整備は完了扱いとし、ここからは以下の 3 つを 設計対象にする。
 
-- Scenario Bundle
-- Result Bundle
-- Replay Log
+- Scenario Bundle - Result Bundle - Replay Log
 
 ## 前提
 
-EnvForge は、ユーザが環境を作成し、学習結果を再生する
-Unity アプリケーションである。
+EnvForge は、ユーザが環境を作成し、学習結果を再生する Unity
+アプリケーションである。
 
-EmbodiedLab は、Scenario Bundle を受け取り、クラウド上で
-学習を実行し、Result Bundle と Replay Log を返す。
+EmbodiedLab は、Scenario Bundle を受け取り、クラウド上で 学習を実行し、Result
+Bundle と Replay Log を返す。
 
 EmbodiedLab は Unity や ML-Agents を必ずしも使わない。
 クラウド向きの学習環境で、EnvForge のシナリオ条件を
@@ -26,27 +23,16 @@ EmbodiedLab は Unity や ML-Agents を必ずしも使わない。
 
 ## Scenario Bundle 初期案
 
-Scenario Bundle は、ユーザが EnvForge 上で作成した
-学習シナリオを表す。
+Scenario Bundle は、ユーザが EnvForge 上で作成した 学習シナリオを表す。
 
 初期版では以下を含める。
 
-- schema version
-- EnvForge binary compatibility
-- world size または座標系情報
-- static walls
-- static obstacles
-- goal
-- robot start pose
-- robot type
-- sensor spec
-- reward spec
-- training spec
-- seed
+- schema version - EnvForge binary compatibility - world size または座標系情報 -
+  static walls - static obstacles - goal - robot start pose - robot type -
+  sensor spec - reward spec - training spec - seed
 
-当面、障害物は静的オブジェクトに限定する。
-人間や動的障害物は schema に拡張余地を残すが、
-初期実装の対象にはしない。
+当面、障害物は静的オブジェクトに限定する。 人間や動的障害物は schema
+に拡張余地を残すが、 初期実装の対象にはしない。
 
 ## Reward Spec 初期案
 
@@ -54,16 +40,11 @@ Scenario Bundle は、ユーザが EnvForge 上で作成した
 
 初期候補は以下である。
 
-- goal reached reward
-- goal progress reward
-- collision penalty
-- obstacle proximity penalty
-- step penalty
-- stuck penalty
-- zone entry reward or penalty
+- goal reached reward - goal progress reward - collision penalty - obstacle
+  proximity penalty - step penalty - stuck penalty - zone entry reward or
+  penalty
 
-各 component は、名前、重み、有効条件、対象オブジェクト、
-必要なら閾値を持つ。
+各 component は、名前、重み、有効条件、対象オブジェクト、 必要なら閾値を持つ。
 
 ## Result Bundle 初期案
 
@@ -71,56 +52,33 @@ Result Bundle は、EmbodiedLab が返す学習結果を表す。
 
 初期版では以下を含める。
 
-- result schema version
-- scenario id
-- job id
-- status
-- model artifact location
-- model format
-- training summary
-- evaluation summary
-- replay log location
-- error report
-- compatibility metadata
+- result schema version - scenario id - job id - status - model artifact
+  location - model format - training summary - evaluation summary - replay log
+  location - error report - compatibility metadata
 
 compatibility metadata には、少なくとも以下を含める。
 
-- scenario schema version
-- robot version
-- sensor version
-- action layout
-- observation layout
-- EnvForge binary compatibility
+- scenario schema version - robot version - sensor version - action layout -
+  observation layout - EnvForge binary compatibility
 
 ## Replay Log 初期案
 
-Replay Log は動画ではなく、EnvForge がローカル再生できる
-構造化ログとする。
+Replay Log は動画ではなく、EnvForge がローカル再生できる 構造化ログとする。
 
 初期版では以下を含める。
 
-- episode id
-- step index
-- simulation time
-- robot position
-- robot rotation
-- action
-- total reward
-- reward component breakdown
-- termination reason
-- collision events
-- compact sensor summaries
+- episode id - step index - simulation time - robot position - robot rotation -
+  action - total reward - reward component breakdown - termination reason -
+  collision events - compact sensor summaries
 
 初期版では、全ステップの観測画像は必須にしない。
-サイズが大きくなりやすいため、必要なら後からオプションとして
-追加する。
+サイズが大きくなりやすいため、必要なら後からオプションとして 追加する。
 
 ## Scenario Bundle v0 サンプル
 
 最初の Scenario Bundle は、EnvForge で作った静的なナビゲーション
-シナリオを表す。座標系は、EnvForge と EmbodiedLab の間で共有する
-右手系の 2D 平面として扱う。`x` と `z` を水平面、`y` を高さとする。
-単位は meter とする。
+シナリオを表す。座標系は、EnvForge と EmbodiedLab の間で共有する 右手系の 2D
+平面として扱う。`x` と `z` を水平面、`y` を高さとする。 単位は meter とする。
 
 ```json
 {
@@ -226,9 +184,9 @@ Replay Log は動画ではなく、EnvForge がローカル再生できる
 
 ## Result Bundle v0 サンプル
 
-Result Bundle は、EmbodiedLab が学習完了または失敗時に返す結果である。
-成功時は model artifact と Replay Log の場所を含む。失敗時は
-`status` を `failed` にし、`error` に診断情報を入れる。
+Result Bundle は、EmbodiedLab が学習完了または失敗時に返す結果である。 成功時は
+model artifact と Replay Log の場所を含む。失敗時は `status` を `failed`
+にし、`error` に診断情報を入れる。
 
 ```json
 {
@@ -343,36 +301,47 @@ Replay Log は、episode と step の列として扱う。初期版では JSON L
 
 EnvForge が主に責任を持つものは以下である。
 
-- ユーザが理解するシナリオ意味論
-- Unity 上の配置、報酬設定、再生体験
-- Scenario Bundle の生成
-- Replay Log の再生
-- モデルとバイナリ互換性の検証
+- ユーザが理解するシナリオ意味論 - Unity 上の配置、報酬設定、再生体験 - Scenario
+  Bundle の生成 - Replay Log の再生 - モデルとバイナリ互換性の検証
 
 EmbodiedLab が主に責任を持つものは以下である。
 
-- Scenario Bundle の検証
-- 学習環境への変換
-- 学習ジョブの実行
-- 成果物保存
-- Result Bundle の生成
-- Replay Log の出力
+- Scenario Bundle の検証 - 学習環境への変換 - 学習ジョブの実行 - 成果物保存 -
+  Result Bundle の生成 - Replay Log の出力
 
 ## 次の具体タスク
 
-1. EnvForge 側で Scenario Bundle を生成する場所を決める。
-2. EmbodiedLab 側で Scenario Bundle を受け取る API 境界を決める。
-3. 契約の versioning 方針を決める。
-4. 両リポジトリで契約テストを持つ方法を決める。
-5. EmbodiedLab 側で Pydantic model を追加する。
-6. Result Bundle と Replay Log の artifact 保存方針を決める。
+1. EnvForge 側で Scenario Bundle を生成する場所を決める。 2. EmbodiedLab 側で
+   Scenario Bundle を受け取る API 境界を決める。 3. 契約の versioning
+   方針を決める。 4. 両リポジトリで契約テストを持つ方法を決める。 5. EmbodiedLab
+   側で Pydantic model を追加する。 6. Result Bundle と Replay Log の artifact
+   保存方針を決める。
+
+## EnvForge 側 Scenario Bundle 生成入口
+
+EnvForge 側では、`NavigationSceneBuilder` にクラウド送信や契約の詳細を
+持たせず、`Assets/Scripts/Navigation/Contracts` に Scenario Bundle 用の
+DTO、serializer、build helper を置く。
+
+現時点の source of truth は EmbodiedLab 側の Pydantic model とする。 EnvForge
+側の DTO は、そのモデルに追従するための送信用境界であり、 JSON
+の型名やフィールド名は `schema_version`、`coordinate_system`、
+`rotation_y_degrees` など、EmbodiedLab 側の契約意図が読み取れる名前にする。
+
+座標は Unity の `x` / `z` 平面を meter 単位の連続座標として出す。 `y`
+は高さとして Unity シーン生成には残すが、Scenario Bundle v0 では 水平面の `x` /
+`z` と `rotation_y_degrees` を送る。 壁と静的障害物は、Unity シーン生成と Bundle
+生成で同じ `NavigationScenarioLayout` を参照し、意味差が出にくい構造にする。
+
+この段階では HTTP アップロード、クラウド送信 UI、認証情報の扱いは実装しない。
+EmbodiedLab 側の Pydantic model が確定したら、EnvForge 側 DTO と serializer
+の追従差分を確認する。
 
 ## 保留事項
 
-- JSON Schema を採用するか、Pydantic model を source of truth にするか。
-- 契約定義を片方のリポジトリに置くか、小さな共有パッケージにするか。
-- EnvForge 側の Unity データ構造と契約形式の対応表。
-- Replay Log の圧縮形式。
-- Replay Log の分割単位。
-- 大規模シナリオでの座標系と単位。
-- モデル形式を ONNX に固定するか。
+- Pydantic model を source of truth としつつ、JSON Schema を公開・検証用に
+  出力するか。 - 契約定義を将来も EmbodiedLab
+  側に寄せるか、小さな共有パッケージにするか。 - EnvForge 側の Unity
+  データ構造と契約形式の対応表。 - Replay Log の圧縮形式。 - Replay Log
+  の分割単位。 - 大規模シナリオでの座標系と単位。 - モデル形式を ONNX
+  に固定するか。
