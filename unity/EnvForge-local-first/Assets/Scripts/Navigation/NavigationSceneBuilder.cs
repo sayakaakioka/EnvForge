@@ -16,6 +16,7 @@ namespace EnvForge.Navigation
         private const int SegmentationImageWidth = 112;
         private const int HiddenFromSegmentationCameraLayer = 2;
         private const int MaxEpisodeSteps = 1000;
+        private const string TrainingModeArgument = "--envforge-train";
 
         [SerializeField] private Vector2 floorSize = new(16f, 12f);
         [SerializeField] private float wallHeight = 1.8f;
@@ -29,16 +30,24 @@ namespace EnvForge.Navigation
         [SerializeField] private int saveSegmentationEverySteps = 100;
         [SerializeField] private bool showSegmentationPreview = true;
         [SerializeField] private Rect segmentationPreviewRect = new(0.74f, 0.02f, 0.24f, 0.18f);
+        [SerializeField] private Material passableSegmentationMaterial;
+        [SerializeField] private Material blockedSegmentationMaterial;
+        [SerializeField] private Material agentVisualMaterial;
+        [SerializeField] private Material directionArrowMaterial;
+        [SerializeField] private Material goalVisualMaterial;
+
+        private bool trainingModeRequested;
 
         private void Start()
         {
+            trainingModeRequested = IsTrainingModeRequested();
             ConfigureCommunicatorMode();
 
-            Material passableMaterial = CreateUnlitMaterial("Navigation Passable Segmentation Material", Color.green);
-            Material blockedMaterial = CreateUnlitMaterial("Navigation Blocked Segmentation Material", Color.blue);
-            Material agentMaterial = CreateUnlitMaterial("Navigation Agent Material", new Color(0.16f, 0.38f, 0.78f));
-            Material arrowMaterial = CreateUnlitMaterial("Navigation Direction Arrow Material", Color.white);
-            Material goalMaterial = CreateUnlitMaterial("Navigation Goal Material", new Color(1f, 0.82f, 0.12f));
+            Material passableMaterial = ResolveMaterial(passableSegmentationMaterial, "Navigation Passable Segmentation Material", Color.green);
+            Material blockedMaterial = ResolveMaterial(blockedSegmentationMaterial, "Navigation Blocked Segmentation Material", Color.blue);
+            Material agentMaterial = ResolveMaterial(agentVisualMaterial, "Navigation Agent Material", new Color(0.16f, 0.38f, 0.78f));
+            Material arrowMaterial = ResolveMaterial(directionArrowMaterial, "Navigation Direction Arrow Material", Color.white);
+            Material goalMaterial = ResolveMaterial(goalVisualMaterial, "Navigation Goal Material", new Color(1f, 0.82f, 0.12f));
 
             CreateFloor(passableMaterial);
 
@@ -79,7 +88,7 @@ namespace EnvForge.Navigation
 
         private void ConfigureCommunicatorMode()
         {
-            CommunicatorFactory.Enabled = inferenceModel == null;
+            CommunicatorFactory.Enabled = trainingModeRequested || inferenceModel == null;
         }
 
         private void CreateFloor(Material material)
@@ -150,11 +159,30 @@ namespace EnvForge.Navigation
                 return;
             }
 
+            if (trainingModeRequested)
+            {
+                Debug.Log($"Navigation inference model is assigned, but {TrainingModeArgument} was passed. Using the default ML-Agents behavior.");
+                return;
+            }
+
             behaviorParameters.Model = inferenceModel;
             behaviorParameters.InferenceDevice = inferenceDevice;
             behaviorParameters.DeterministicInference = deterministicInference;
             behaviorParameters.BehaviorType = BehaviorType.InferenceOnly;
             Debug.Log($"Navigation inference model assigned: {inferenceModel.name}.");
+        }
+
+        private static bool IsTrainingModeRequested()
+        {
+            foreach (string argument in System.Environment.GetCommandLineArgs())
+            {
+                if (argument == TrainingModeArgument)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void ConfigureDecisionRequester(DecisionRequester decisionRequester)
@@ -282,6 +310,17 @@ namespace EnvForge.Navigation
             capture.Configure(saveSegmentationFrames, saveSegmentationEverySteps, SegmentationImageWidth, SegmentationImageHeight);
         }
 
+        private static Material ResolveMaterial(Material assignedMaterial, string fallbackMaterialName, Color fallbackColor)
+        {
+            if (assignedMaterial != null)
+            {
+                return assignedMaterial;
+            }
+
+            Debug.LogWarning($"{fallbackMaterialName} is not assigned. Creating a runtime fallback material.");
+            return CreateUnlitMaterial(fallbackMaterialName, fallbackColor);
+        }
+
         private static Material CreateUnlitMaterial(string materialName, Color color)
         {
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
@@ -293,6 +332,12 @@ namespace EnvForge.Navigation
             if (shader == null)
             {
                 shader = Shader.Find("Standard");
+            }
+
+            if (shader == null)
+            {
+                Debug.LogError($"{materialName} could not find a compatible shader. Assign a material asset on NavigationSceneBuilder.");
+                return null;
             }
 
             Material material = new(shader);

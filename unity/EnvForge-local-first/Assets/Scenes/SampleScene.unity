@@ -646,6 +646,11 @@ MonoBehaviour:
     y: 0.02
     width: 0.24
     height: 0.18
+  passableSegmentationMaterial: {fileID: 2100000, guid: f38fb1f7fe964465b79fec96703baf56, type: 2}
+  blockedSegmentationMaterial: {fileID: 2100000, guid: 5d4cc72fd5a44f8c8b9e182ba02df709, type: 2}
+  agentVisualMaterial: {fileID: 2100000, guid: ac7c0f3cf4784b8bb9eca432b3445926, type: 2}
+  directionArrowMaterial: {fileID: 2100000, guid: aeb3d4b7989540649f5c1ca73ac3ab53, type: 2}
+  goalVisualMaterial: {fileID: 2100000, guid: 1cb1a4ecb3ca4df99caa2504e8ab5a06, type: 2}
 --- !u!4 &2127491172
 Transform:
   m_ObjectHideFlags: 0
