@@ -266,29 +266,47 @@ Example line:
     "rotation_y_degrees": 0.0
   },
   "action": {
-    "forward": 0.2,
-    "turn": 0.0
+    "values": [
+      {
+        "name": "forward",
+        "value": 0.2
+      },
+      {
+        "name": "turn",
+        "value": 0.0
+      }
+    ]
   },
   "reward": {
     "total": 0.04,
-    "components": {
-      "goal_progress": 0.05,
-      "step_penalty": -0.01
-    }
+    "components": [
+      {
+        "name": "goal_progress",
+        "value": 0.05
+      },
+      {
+        "name": "step_penalty",
+        "value": -0.01
+      }
+    ]
   },
   "events": [],
-  "sensors": {
-    "front_distance": 5.0
-  },
+  "sensors": [
+    {
+      "id": "front_distance",
+      "type": "distance_meters",
+      "value": 5.0
+    }
+  ],
   "terminated": false,
   "termination_reason": null
 }
 ```
 
 EnvForge should replay this structured log locally rather than depending on
-video output. The first replay implementation can support the fixed v0 action
-keys and known sensor summaries, then move to a custom parser if arbitrary
-reward component names become necessary.
+video output. Replay Log v0 intentionally uses arrays of named values instead
+of arbitrary JSON objects for action values, reward components, and sensor
+summaries so Unity can parse it with `JsonUtility`.
 
 ## WebSocket Notifications
 
