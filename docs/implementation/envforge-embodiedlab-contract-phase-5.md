@@ -50,9 +50,9 @@ Sentis runtime load / inference の安定検証は次フェーズの作業とす
 ## Replay 再生の扱い
 
 Replay Log を読み込んだ時点で、対象 agent の live control を止める。
-具体的には `NavigationAgent`、`DecisionRequester`、`AgentMotor` を disable し、
-`Rigidbody` を kinematic にして、Replay Log の位置と Y 回転を authoritative
-state として扱う。
+具体的には `AgentMotor` を disable し、`Rigidbody` を kinematic にして、
+Replay Log の位置と Y 回転を authoritative state として扱う。現在の主経路では
+Unity側の `NavigationAgent` / `DecisionRequester` は生成しない。
 
 Replay UI は再生、一時停止、停止、1 step 前後移動を提供する。
 画面上には現在 step、行動、報酬合計、reward component、終了理由を表示する。
@@ -62,6 +62,8 @@ Replay UI は再生、一時停止、停止、1 step 前後移動を提供する
 - Sentis ONNX を runtime load して実推論する導線。
 - 認証つき GCS artifact access。
 - WebSocket による自動状態更新。
+- `submission_id`、送信時刻、preset、主要な学習設定、status、artifact readiness を
+  EnvForge 側に保存するローカル job history。
 - 長い Replay Log の圧縮、分割、streaming load。
 - Replay Log と Scene object id の厳密な対応。
 - Cloud run configuration asset の editor tooling。

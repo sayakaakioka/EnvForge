@@ -32,6 +32,38 @@ namespace EnvForge.Navigation.Contracts
         public int TrainingTimesteps { get; set; } = 5000;
 
         public int Seed { get; set; } = 10;
+
+        public int NSteps { get; set; } = 32;
+
+        public int BatchSize { get; set; } = 32;
+
+        public float Gamma { get; set; } = 0.99f;
+
+        public float LearningRate { get; set; } = 0.0003f;
+
+        public float EntCoef { get; set; }
+
+        public int EvalEpisodes { get; set; } = 20;
+
+        public float GoalReachedReward { get; set; } = 10.0f;
+
+        public float GoalProgressReward { get; set; } = 0.5f;
+
+        public float CollisionPenalty { get; set; } = -5.0f;
+
+        public float StepPenalty { get; set; } = -0.01f;
+
+        public float MovementReward { get; set; }
+
+        public float WideAnglePenalty { get; set; }
+
+        public float RearAnglePenalty { get; set; }
+
+        public float InactivePenalty { get; set; }
+
+        public float MovementThreshold { get; set; } = 0.001f;
+
+        public float TurnActivityThreshold { get; set; } = 0.3f;
     }
 
     public static class NavigationScenarioBundleBuilder
@@ -108,10 +140,16 @@ namespace EnvForge.Navigation.Contracts
                 {
                     components = new List<RewardComponentDto>
                     {
-                        new RewardComponentDto { name = "goal_reached", type = "terminal_reward", weight = 10.0f },
-                        new RewardComponentDto { name = "goal_progress", type = "distance_delta", target = "goal_001", weight = 0.5f },
-                        new RewardComponentDto { name = "collision_penalty", type = "collision", weight = -5.0f },
-                        new RewardComponentDto { name = "step_penalty", type = "per_step", weight = -0.01f },
+                        new RewardComponentDto { name = "goal_reached", type = "terminal_reward", weight = source.GoalReachedReward },
+                        new RewardComponentDto { name = "goal_progress", type = "distance_delta", target = "goal_001", weight = source.GoalProgressReward },
+                        new RewardComponentDto { name = "collision_penalty", type = "collision", weight = source.CollisionPenalty },
+                        new RewardComponentDto { name = "step_penalty", type = "per_step", weight = source.StepPenalty },
+                        new RewardComponentDto { name = "movement_reward", type = "per_step", weight = source.MovementReward },
+                        new RewardComponentDto { name = "wide_angle_penalty", type = "per_step", weight = source.WideAnglePenalty },
+                        new RewardComponentDto { name = "rear_angle_penalty", type = "per_step", weight = source.RearAnglePenalty },
+                        new RewardComponentDto { name = "inactive_penalty", type = "per_step", weight = source.InactivePenalty },
+                        new RewardComponentDto { name = "movement_threshold", type = "per_step", weight = source.MovementThreshold },
+                        new RewardComponentDto { name = "turn_activity_threshold", type = "per_step", weight = source.TurnActivityThreshold },
                     },
                 },
                 training = new TrainingDto
@@ -120,12 +158,12 @@ namespace EnvForge.Navigation.Contracts
                     timesteps = source.TrainingTimesteps,
                     seed = source.Seed,
                     max_episode_steps = source.MaxEpisodeSteps,
-                    n_steps = 32,
-                    batch_size = 32,
-                    gamma = 0.99f,
-                    learning_rate = 0.0003f,
-                    ent_coef = 0.0f,
-                    eval_episodes = 20,
+                    n_steps = source.NSteps,
+                    batch_size = source.BatchSize,
+                    gamma = source.Gamma,
+                    learning_rate = source.LearningRate,
+                    ent_coef = source.EntCoef,
+                    eval_episodes = source.EvalEpisodes,
                 },
             };
         }

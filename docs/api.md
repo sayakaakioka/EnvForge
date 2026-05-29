@@ -116,6 +116,36 @@ Minimal shape:
         "name": "step_penalty",
         "type": "per_step",
         "weight": -0.01
+      },
+      {
+        "name": "movement_reward",
+        "type": "per_step",
+        "weight": 0.0
+      },
+      {
+        "name": "wide_angle_penalty",
+        "type": "per_step",
+        "weight": 0.0
+      },
+      {
+        "name": "rear_angle_penalty",
+        "type": "per_step",
+        "weight": 0.0
+      },
+      {
+        "name": "inactive_penalty",
+        "type": "per_step",
+        "weight": 0.0
+      },
+      {
+        "name": "movement_threshold",
+        "type": "per_step",
+        "weight": 0.001
+      },
+      {
+        "name": "turn_activity_threshold",
+        "type": "per_step",
+        "weight": 0.3
       }
     ]
   },

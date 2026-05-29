@@ -483,6 +483,9 @@ MonoBehaviour:
   agentVisualMaterial: {fileID: 2100000, guid: ac7c0f3cf4784b8bb9eca432b3445926, type: 2}
   directionArrowMaterial: {fileID: 2100000, guid: aeb3d4b7989540649f5c1ca73ac3ab53, type: 2}
   goalVisualMaterial: {fileID: 2100000, guid: 1cb1a4ecb3ca4df99caa2504e8ab5a06, type: 2}
+  apiSettings: {fileID: 0}
+  apiBaseUrl: https://embodiedlab-api-886092613885.asia-northeast1.run.app
+  showCloudRunPanel: 1
 --- !u!4 &2127491172
 Transform:
   m_ObjectHideFlags: 0

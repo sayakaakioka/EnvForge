@@ -108,7 +108,7 @@ ONNX書き出し、評価ログ保存、再現用設定保存
 
 - 役割: Unityシーン、床、壁、障害物、ターゲット候補、
   エージェント候補を管理する。
-- 旧対応: `Assets/Scenes/SampleScene.unity`, `Assets/Masayacity.unity`,
+- 旧対応: `Assets/Scenes/EnvForgeNavigationLab.unity`, `Assets/Masayacity.unity`,
   `Assets/Roads/NewNakano11F/*`
 
 ### `MapGenerator`

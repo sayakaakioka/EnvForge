@@ -1,8 +1,3 @@
-using Unity.InferenceEngine;
-using Unity.MLAgents;
-using Unity.MLAgents.Actuators;
-using Unity.MLAgents.Policies;
-using Unity.MLAgents.Sensors;
 using UnityEngine;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Cloud;
@@ -19,17 +14,12 @@ namespace EnvForge.Navigation
         private const int SegmentationImageWidth = NavigationScenarioBundleDefaults.SegmentationImageWidth;
         private const int HiddenFromSegmentationCameraLayer = 2;
         private const int MaxEpisodeSteps = NavigationScenarioBundleDefaults.MaxEpisodeSteps;
-        private const string TrainingModeArgument = "--envforge-train";
         private const string DefaultScenarioId = NavigationScenarioBundleDefaults.ScenarioId;
 
         [SerializeField] private Vector2 floorSize = new(16f, 12f);
         [SerializeField] private float wallHeight = 1.8f;
         [SerializeField] private float wallThickness = 0.35f;
         [SerializeField] private float goalReachRadius = 1.2f;
-        [SerializeField] private string behaviorName = "NavigationFinal";
-        [SerializeField] private ModelAsset inferenceModel;
-        [SerializeField] private InferenceDevice inferenceDevice = InferenceDevice.Default;
-        [SerializeField] private bool deterministicInference = true;
         [SerializeField] private bool saveSegmentationFrames;
         [SerializeField] private int saveSegmentationEverySteps = 100;
         [SerializeField] private bool showSegmentationPreview = true;
@@ -42,8 +32,9 @@ namespace EnvForge.Navigation
         [SerializeField] private EnvForgeApiSettings apiSettings;
         [SerializeField] private string apiBaseUrl = "http://localhost:8000";
         [SerializeField] private bool showCloudRunPanel = true;
+        [SerializeField] private NavigationTrainingSettings trainingSettings = new();
 
-        private bool trainingModeRequested;
+        public NavigationTrainingSettings TrainingSettings => trainingSettings;
 
         public ScenarioBundleDto BuildScenarioBundle(string scenarioId = DefaultScenarioId)
         {
@@ -57,9 +48,6 @@ namespace EnvForge.Navigation
 
         private void Start()
         {
-            trainingModeRequested = IsTrainingModeRequested();
-            ConfigureCommunicatorMode();
-
             Material passableMaterial = ResolveMaterial(passableSegmentationMaterial, "Navigation Passable Segmentation Material", Color.green);
             Material blockedMaterial = ResolveMaterial(blockedSegmentationMaterial, "Navigation Blocked Segmentation Material", Color.blue);
             Material agentMaterial = ResolveMaterial(agentVisualMaterial, "Navigation Agent Material", new Color(0.16f, 0.38f, 0.78f));
@@ -84,33 +72,15 @@ namespace EnvForge.Navigation
             NavigationDebugOverlay debugOverlay = gameObject.AddComponent<NavigationDebugOverlay>();
             debugOverlay.Configure(metrics, debugObservationProvider);
 
-            NavigationGoalObservationProvider goalObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
-            goalObservationProvider.Configure(metrics, floorSize.magnitude);
+            NavigationLiveController liveController = agent.GetComponent<NavigationLiveController>();
 
-            NavigationAgent navigationAgent = agent.GetComponent<NavigationAgent>();
-            navigationAgent.Configure(
-                goal.transform,
-                agent.GetComponent<Rigidbody>(),
-                agent.GetComponent<AgentMotor>(),
-                metrics,
-                goalObservationProvider,
-                AgentStartPosition,
-                AgentStartRotation,
-                GoalStartPosition,
-                GetRandomStartHalfExtents());
-
-            CreateBoundaryWalls(blockedMaterial, navigationAgent);
-            CreateInnerWalls(blockedMaterial, navigationAgent);
+            CreateBoundaryWalls(blockedMaterial, liveController);
+            CreateInnerWalls(blockedMaterial, liveController);
 
             GoalReachChecker goalReachChecker = gameObject.AddComponent<GoalReachChecker>();
-            goalReachChecker.Configure(navigationAgent, metrics, goalReachRadius);
+            goalReachChecker.Configure(liveController, metrics, goalReachRadius);
 
             PositionCamera();
-        }
-
-        private void ConfigureCommunicatorMode()
-        {
-            CommunicatorFactory.Enabled = trainingModeRequested || inferenceModel == null;
         }
 
         private void CreateFloor(Material material)
@@ -150,64 +120,14 @@ namespace EnvForge.Navigation
             Rigidbody body = agent.AddComponent<Rigidbody>();
             body.mass = 1f;
 
-            ConfigureBehaviorParameters(agent.AddComponent<BehaviorParameters>());
             agent.AddComponent<AgentMotor>();
             Camera segmentationCamera = CreateSegmentationCamera(agent.transform);
-            ConfigureCameraSensor(agent, segmentationCamera, showSegmentationPreview);
             ConfigureSegmentationCapture(segmentationCamera.gameObject);
             ConfigureSegmentationPreview(segmentationCamera.gameObject, segmentationCamera);
-            NavigationAgent navigationAgent = agent.AddComponent<NavigationAgent>();
-            navigationAgent.MaxStep = MaxEpisodeSteps;
-            ConfigureDecisionRequester(agent.AddComponent<DecisionRequester>());
+            agent.AddComponent<NavigationLiveController>();
             CreateDirectionArrow(agent.transform, arrowMaterial);
 
             return agent;
-        }
-
-        private void ConfigureBehaviorParameters(BehaviorParameters behaviorParameters)
-        {
-            behaviorParameters.BehaviorName = behaviorName;
-            behaviorParameters.BehaviorType = BehaviorType.Default;
-            behaviorParameters.BrainParameters.VectorObservationSize = NavigationGoalObservation.ValueCount;
-            behaviorParameters.BrainParameters.NumStackedVectorObservations = 1;
-            behaviorParameters.BrainParameters.ActionSpec = ActionSpec.MakeContinuous(2);
-
-            if (inferenceModel == null)
-            {
-                Debug.Log("Navigation inference model is not assigned. Using the default ML-Agents behavior.");
-                return;
-            }
-
-            if (trainingModeRequested)
-            {
-                Debug.Log($"Navigation inference model is assigned, but {TrainingModeArgument} was passed. Using the default ML-Agents behavior.");
-                return;
-            }
-
-            behaviorParameters.Model = inferenceModel;
-            behaviorParameters.InferenceDevice = inferenceDevice;
-            behaviorParameters.DeterministicInference = deterministicInference;
-            behaviorParameters.BehaviorType = BehaviorType.InferenceOnly;
-            Debug.Log($"Navigation inference model assigned: {inferenceModel.name}.");
-        }
-
-        private static bool IsTrainingModeRequested()
-        {
-            foreach (string argument in System.Environment.GetCommandLineArgs())
-            {
-                if (argument == TrainingModeArgument)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static void ConfigureDecisionRequester(DecisionRequester decisionRequester)
-        {
-            decisionRequester.DecisionPeriod = 5;
-            decisionRequester.TakeActionsBetweenDecisions = true;
         }
 
         private static void CreateDirectionArrow(Transform agent, Material material)
@@ -308,20 +228,6 @@ namespace EnvForge.Navigation
             return camera;
         }
 
-        private static void ConfigureCameraSensor(GameObject agent, Camera segmentationCamera, bool runtimeCameraEnable)
-        {
-            CameraSensorComponent cameraSensor = agent.AddComponent<CameraSensorComponent>();
-            cameraSensor.Camera = segmentationCamera;
-            cameraSensor.SensorName = "SegmentationCamera";
-            cameraSensor.Width = SegmentationImageWidth;
-            cameraSensor.Height = SegmentationImageHeight;
-            cameraSensor.Grayscale = false;
-            cameraSensor.ObservationStacks = 1;
-            cameraSensor.ObservationType = ObservationType.Default;
-            cameraSensor.CompressionType = SensorCompressionType.PNG;
-            cameraSensor.RuntimeCameraEnable = runtimeCameraEnable;
-        }
-
         private void ConfigureSegmentationPreview(GameObject cameraObject, Camera segmentationCamera)
         {
             SegmentationPreviewOverlay preview = cameraObject.AddComponent<SegmentationPreviewOverlay>();
@@ -391,7 +297,7 @@ namespace EnvForge.Navigation
 
         private NavigationScenarioBundleSource CreateScenarioBundleSource(string scenarioId)
         {
-            return new NavigationScenarioBundleSource
+            NavigationScenarioBundleSource source = new()
             {
                 ScenarioId = scenarioId,
                 FloorSize = floorSize,
@@ -405,6 +311,8 @@ namespace EnvForge.Navigation
                 SegmentationImageHeight = SegmentationImageHeight,
                 MaxEpisodeSteps = MaxEpisodeSteps,
             };
+            trainingSettings.ApplyTo(source);
+            return source;
         }
     }
 }

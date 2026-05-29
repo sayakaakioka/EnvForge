@@ -43,21 +43,17 @@ It builds a small navigation task at runtime with:
 
 Setup:
 
-1. Open the Unity project at `unity/EnvForge-local-first/`. 2. Open
-   `Assets/Scenes/SampleScene.unity`. 3. Keep `NavigationBootstrap` active. 4.
-   Keep the historical `Mvp0Bootstrap`, `Mvp1Bootstrap`, and `Mvp2Bootstrap`
-   inactive. 5. Enter Play mode.
+1. Open the Unity project at `unity/EnvForge-local-first/`.
+2. Open `Assets/Scenes/EnvForgeNavigationLab.unity`.
+3. Keep `NavigationBootstrap` active.
+4. Keep the historical `Mvp0Bootstrap`, `Mvp1Bootstrap`, and `Mvp2Bootstrap`
+   inactive.
+5. Enter Play mode.
 
-By default, `NavigationBootstrap` has the bundled strict model assigned:
-
-```text
-unity/EnvForge-local-first/Assets/Resources/Models/NavigationFinal.onnx
-```
-
-To run a different model, assign another compatible `ModelAsset` to the
-`Inference Model` field on `NavigationBootstrap`. To train instead of running
-local inference, clear `Inference Model`, start the trainer, then enter Play
-mode.
+`NavigationBootstrap` now starts the navigation lab with local manual control,
+cloud submission controls, and replay playback. The active path does not create
+ML-Agents components. Cloud training is handled by EmbodiedLab, and returned
+replay logs are downloaded back into this scene for inspection.
 
 Windows Standalone is pinned to Direct3D 11 in Project Settings to avoid
 Direct3D 12 render texture crashes observed on Snapdragon / Adreno machines.
