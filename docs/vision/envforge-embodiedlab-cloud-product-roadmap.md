@@ -109,7 +109,26 @@ Replay Log v0 は、Unity `JsonUtility` で読めるように、任意 key の o
 ユーザの主目的は、学習済みモデルそのものだけでなく、
 報酬体系が意図通りに働いているかを確認することである。
 
-## Phase 5: 実行基盤の堅牢化
+## Phase 5: 人間が試せるクラウド結果導線
+
+Phase 5 の最小到達点は、EmbodiedLab が生成した結果を EnvForge 側で取得し、
+ユーザがローカルで Replay Log を再生できることである。
+
+この段階では、学習済みモデルを Sentis で安定推論することまでは必須にしない。
+ただし、Result Bundle に含まれる model artifact metadata を読み取り、
+通常 ONNX と Sentis ONNX をローカルに保存できる導線は用意する。
+
+今回の最小範囲は以下である。
+
+- EnvForge が Result Document / Result Bundle の artifact metadata を読める。
+- EnvForge が GCS 上の Replay Log を download できる。
+- EnvForge が Replay Log を Unity シーン上で再生できる。
+- EnvForge が通常 ONNX と Sentis ONNX を local artifact として保存できる。
+- backend がない状態でも demo Replay Log を読み込んで再生確認できる。
+
+これにより、人間はまず replay で報酬設計とロボット挙動を確認できる。
+
+## Phase 6: 実行基盤の堅牢化
 
 初期連携が動いた後に、本番運用に必要な項目を整える。
 
@@ -117,7 +136,7 @@ Replay Log v0 は、Unity `JsonUtility` で読めるように、任意 key の o
   失敗時の診断 - quota とコスト制御 - 長時間学習のタイムアウト - Replay Log
   の圧縮と分割 - モデル互換性の検証
 
-## Phase 6: 将来拡張
+## Phase 7: 将来拡張
 
 初期版の後に検討する拡張は以下である。
 

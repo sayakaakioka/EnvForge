@@ -5,6 +5,8 @@ using Unity.MLAgents.Policies;
 using Unity.MLAgents.Sensors;
 using UnityEngine;
 using EnvForge.Navigation.Contracts;
+using EnvForge.Navigation.Cloud;
+using EnvForge.Navigation.Replay;
 
 namespace EnvForge.Navigation
 {
@@ -37,6 +39,9 @@ namespace EnvForge.Navigation
         [SerializeField] private Material agentVisualMaterial;
         [SerializeField] private Material directionArrowMaterial;
         [SerializeField] private Material goalVisualMaterial;
+        [SerializeField] private EnvForgeApiSettings apiSettings;
+        [SerializeField] private string apiBaseUrl = "http://localhost:8000";
+        [SerializeField] private bool showCloudRunPanel = true;
 
         private bool trainingModeRequested;
 
@@ -65,6 +70,11 @@ namespace EnvForge.Navigation
 
             GameObject agent = CreateAgent(agentMaterial, arrowMaterial);
             GameObject goal = CreateGoal(goalMaterial);
+            NavigationReplayPlayer replayPlayer = gameObject.AddComponent<NavigationReplayPlayer>();
+            replayPlayer.Configure(agent.transform);
+            EnvForgeCloudRunPanel cloudRunPanel = gameObject.AddComponent<EnvForgeCloudRunPanel>();
+            cloudRunPanel.Configure(this, replayPlayer, apiSettings, apiBaseUrl);
+            cloudRunPanel.enabled = showCloudRunPanel;
 
             NavigationMetrics metrics = gameObject.AddComponent<NavigationMetrics>();
             metrics.Configure(agent.transform, goal.transform);

@@ -166,6 +166,7 @@ namespace EnvForge.Navigation.Contracts
         public string submission_id;
         public string status;
         public ProgressDto progress;
+        public ResultArtifactsDto artifacts;
         public ResultBundleDto result_bundle;
         public string updated_at;
     }
@@ -204,16 +205,43 @@ namespace EnvForge.Navigation.Contracts
     public sealed class ResultArtifactsDto
     {
         public ArtifactLocationDto model;
+        public ArtifactLocationDto onnx_model;
+        public ModelArtifactLocationDto sentis_model;
         public ArtifactLocationDto replay_log;
     }
 
     [Serializable]
-    public sealed class ArtifactLocationDto
+    public class ArtifactLocationDto
     {
         public string storage;
         public string bucket;
         public string path;
         public string format;
+    }
+
+    [Serializable]
+    public sealed class ModelArtifactLocationDto : ArtifactLocationDto
+    {
+        public string target;
+        public int opset_version;
+        public ModelInputDto input;
+        public ModelOutputDto output;
+    }
+
+    [Serializable]
+    public sealed class ModelInputDto
+    {
+        public string name;
+        public List<int> shape;
+        public string dtype;
+        public List<string> layout;
+    }
+
+    [Serializable]
+    public sealed class ModelOutputDto
+    {
+        public string name;
+        public List<string> layout;
     }
 
     [Serializable]

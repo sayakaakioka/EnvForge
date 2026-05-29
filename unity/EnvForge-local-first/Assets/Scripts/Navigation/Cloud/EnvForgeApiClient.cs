@@ -10,11 +10,16 @@ namespace EnvForge.Navigation.Cloud
     {
         private const string JsonContentType = "application/json";
 
-        private readonly EnvForgeApiSettings settings;
+        private readonly string baseUrl;
 
         public EnvForgeApiClient(EnvForgeApiSettings settings)
+            : this(settings != null ? settings.BaseUrl : "http://localhost:8000")
         {
-            this.settings = settings;
+        }
+
+        public EnvForgeApiClient(string baseUrl)
+        {
+            this.baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? "http://localhost:8000" : baseUrl;
         }
 
         public IEnumerator SubmitScenario(
@@ -64,7 +69,7 @@ namespace EnvForge.Navigation.Cloud
             Action<string> onSuccess,
             Action<string> onError)
         {
-            using UnityWebRequest request = new(settings.BuildUrl(path), method);
+            using UnityWebRequest request = new(BuildUrl(path), method);
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Accept", JsonContentType);
 
@@ -79,11 +84,18 @@ namespace EnvForge.Navigation.Cloud
 
             if (request.result != UnityWebRequest.Result.Success)
             {
-                onError?.Invoke(request.error);
+                onError?.Invoke($"{request.error}: {request.url}");
                 yield break;
             }
 
             onSuccess?.Invoke(request.downloadHandler.text);
+        }
+
+        private string BuildUrl(string path)
+        {
+            string normalizedBaseUrl = baseUrl.TrimEnd('/');
+            string normalizedPath = path.TrimStart('/');
+            return $"{normalizedBaseUrl}/{normalizedPath}";
         }
     }
 
