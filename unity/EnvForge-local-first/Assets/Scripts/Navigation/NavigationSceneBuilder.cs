@@ -84,8 +84,8 @@ namespace EnvForge.Navigation
             NavigationDebugOverlay debugOverlay = gameObject.AddComponent<NavigationDebugOverlay>();
             debugOverlay.Configure(metrics, debugObservationProvider);
 
-            NavigationGoalObservationProvider mvp3ObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
-            mvp3ObservationProvider.Configure(metrics, floorSize.magnitude);
+            NavigationGoalObservationProvider goalObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
+            goalObservationProvider.Configure(metrics, floorSize.magnitude);
 
             NavigationAgent navigationAgent = agent.GetComponent<NavigationAgent>();
             navigationAgent.Configure(
@@ -93,7 +93,7 @@ namespace EnvForge.Navigation
                 agent.GetComponent<Rigidbody>(),
                 agent.GetComponent<AgentMotor>(),
                 metrics,
-                mvp3ObservationProvider,
+                goalObservationProvider,
                 AgentStartPosition,
                 AgentStartRotation,
                 GoalStartPosition,

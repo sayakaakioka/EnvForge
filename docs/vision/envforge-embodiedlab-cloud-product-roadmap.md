@@ -16,6 +16,9 @@ EmbodiedLab は、EnvForge から渡されたシナリオを受け取り、
 
 Phase 0 の基盤整備は完了したものとして扱う。
 
+過去の MVP 実装や旧 grid-world 経路は、現行仕様を動かすためのコードとしては
+保持しない。必要になった場合は Git 履歴を参照する。
+
 完了済みの内容は以下である。
 
 - EnvForge と EmbodiedLab を別リポジトリのまま扱う方針を確認した。 - EmbodiedLab
