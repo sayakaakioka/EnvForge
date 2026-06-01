@@ -1,6 +1,7 @@
 using UnityEngine;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Cloud;
+using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
 
 namespace EnvForge.Navigation
@@ -61,7 +62,6 @@ namespace EnvForge.Navigation
             NavigationReplayPlayer replayPlayer = gameObject.AddComponent<NavigationReplayPlayer>();
             replayPlayer.Configure(agent.transform);
             EnvForgeCloudRunPanel cloudRunPanel = gameObject.AddComponent<EnvForgeCloudRunPanel>();
-            cloudRunPanel.Configure(this, replayPlayer, apiSettings, apiBaseUrl);
             cloudRunPanel.enabled = showCloudRunPanel;
 
             NavigationMetrics metrics = gameObject.AddComponent<NavigationMetrics>();
@@ -73,6 +73,15 @@ namespace EnvForge.Navigation
             debugOverlay.Configure(metrics, debugObservationProvider);
 
             NavigationLiveController liveController = agent.GetComponent<NavigationLiveController>();
+            NavigationGoalObservationProvider policyObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
+            policyObservationProvider.Configure(metrics, floorSize.magnitude, goalReachRadius);
+            NavigationModelInferenceController inferenceController = agent.GetComponent<NavigationModelInferenceController>();
+            inferenceController.Configure(
+                agent.GetComponent<AgentMotor>(),
+                agent.GetComponent<Rigidbody>(),
+                liveController,
+                policyObservationProvider);
+            cloudRunPanel.Configure(this, replayPlayer, inferenceController, apiSettings, apiBaseUrl);
 
             CreateBoundaryWalls(blockedMaterial, liveController);
             CreateInnerWalls(blockedMaterial, liveController);
@@ -125,6 +134,7 @@ namespace EnvForge.Navigation
             ConfigureSegmentationCapture(segmentationCamera.gameObject);
             ConfigureSegmentationPreview(segmentationCamera.gameObject, segmentationCamera);
             agent.AddComponent<NavigationLiveController>();
+            agent.AddComponent<NavigationModelInferenceController>();
             CreateDirectionArrow(agent.transform, arrowMaterial);
 
             return agent;

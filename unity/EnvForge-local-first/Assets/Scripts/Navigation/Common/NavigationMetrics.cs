@@ -15,6 +15,14 @@ namespace EnvForge.Navigation
 
         public bool IsConfigured => agent != null && goal != null;
 
+        public Vector3 AgentPosition => IsConfigured ? agent.position : Vector3.zero;
+
+        public Vector3 GoalPosition => IsConfigured ? goal.position : Vector3.zero;
+
+        public Vector3 AgentForward => IsConfigured ? agent.forward : Vector3.forward;
+
+        public float AgentRotationYDegrees => IsConfigured ? NormalizeAngle(agent.eulerAngles.y) : 0f;
+
         public float DistanceToGoal
         {
             get
@@ -64,6 +72,11 @@ namespace EnvForge.Navigation
         {
             value.y = 0f;
             return value;
+        }
+
+        private static float NormalizeAngle(float angleDegrees)
+        {
+            return Mathf.Repeat(angleDegrees + 180f, 360f) - 180f;
         }
     }
 }

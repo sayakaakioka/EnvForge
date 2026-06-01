@@ -465,10 +465,6 @@ MonoBehaviour:
   wallHeight: 1.8
   wallThickness: 0.35
   goalReachRadius: 1.2
-  behaviorName: NavigationFinal
-  inferenceModel: {fileID: 5022602860645237092, guid: 95de586a65564a8b96e742723c68d1f3, type: 3}
-  inferenceDevice: 0
-  deterministicInference: 1
   saveSegmentationFrames: 0
   saveSegmentationEverySteps: 100
   showSegmentationPreview: 1

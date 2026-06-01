@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using EnvForge.Navigation.Contracts;
+using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
 
@@ -37,8 +38,10 @@ namespace EnvForge.Navigation.Cloud
 
         private NavigationSceneBuilder sceneBuilder;
         private NavigationReplayPlayer replayPlayer;
+        private NavigationModelInferenceController inferenceController;
         private EnvForgeApiClient apiClient;
         private EnvForgeArtifactDownloader artifactDownloader;
+        private EnvForgeJobHistoryStore jobHistoryStore;
         private ResultDocumentDto latestResult;
         private string submissionId;
         private string activeScenarioId;
@@ -85,17 +88,43 @@ namespace EnvForge.Navigation.Cloud
         public void Configure(
             NavigationSceneBuilder builder,
             NavigationReplayPlayer player,
+            NavigationModelInferenceController inference,
             EnvForgeApiSettings settings,
             string baseUrl)
         {
             sceneBuilder = builder;
             replayPlayer = player;
+            inferenceController = inference;
             fallbackBaseUrl = string.IsNullOrWhiteSpace(baseUrl) ? fallbackBaseUrl : baseUrl;
             apiClient = settings != null
                 ? new EnvForgeApiClient(settings)
                 : new EnvForgeApiClient(fallbackBaseUrl);
             artifactDownloader = new EnvForgeArtifactDownloader();
+            jobHistoryStore = new EnvForgeJobHistoryStore(Application.persistentDataPath);
+            RestoreLatestJob();
             SyncTextFromTrainingSettings();
+        }
+
+        private void RestoreLatestJob()
+        {
+            EnvForgeJobRecordDto latestJob = jobHistoryStore.Latest;
+            if (latestJob == null)
+            {
+                return;
+            }
+
+            submissionId = latestJob.submission_id;
+            activeScenarioId = latestJob.scenario_id;
+            activeJobTrainerSummary = latestJob.trainer_summary;
+            activeJobSettingsSummary = string.IsNullOrWhiteSpace(latestJob.scenario_id)
+                ? latestJob.trainer_summary
+                : $"{latestJob.scenario_id} · {latestJob.trainer_summary}";
+            if (!string.IsNullOrWhiteSpace(latestJob.local_replay_path))
+            {
+                loadedReplaySummary = $"Saved replay: {Shorten(latestJob.submission_id, 18)}";
+            }
+
+            status = $"Cloud: restored {Shorten(latestJob.submission_id, 18)}";
         }
 
         private void OnGUI()
@@ -130,11 +159,12 @@ namespace EnvForge.Navigation.Cloud
             Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxRect.width - Padding * 2f, boxRect.height - Padding * 2f);
             float y = contentRect.y;
 
-            float twoButtonWidth = (contentRect.width - ButtonGap) * 0.5f;
-            Rect replayRect = new(contentRect.x, y, twoButtonWidth, ButtonHeight);
-            Rect cfgRect = new(replayRect.xMax + ButtonGap, y, twoButtonWidth, ButtonHeight);
+            float topButtonWidth = (contentRect.width - ButtonGap * 2f) / 3f;
+            Rect replayRect = new(contentRect.x, y, topButtonWidth, ButtonHeight);
+            Rect cfgRect = new(replayRect.xMax + ButtonGap, y, topButtonWidth, ButtonHeight);
+            Rect inferenceRect = new(cfgRect.xMax + ButtonGap, y, topButtonWidth, ButtonHeight);
 
-            if (DrawButton(replayRect, new GUIContent("▶ REPLAY", "Load replay"), primaryButtonStyle, !busy))
+            if (DrawButton(replayRect, new GUIContent("REPLAY", "Load replay"), primaryButtonStyle, !busy))
             {
                 LoadBundledReplay();
             }
@@ -144,6 +174,14 @@ namespace EnvForge.Navigation.Cloud
                 showTrainingSettings = !showTrainingSettings;
                 showJobDetails = false;
                 SyncTextFromTrainingSettings();
+            }
+
+            GUIStyle inferenceButtonStyle = inferenceController != null && inferenceController.IsRunning
+                ? selectedButtonStyle
+                : buttonStyle;
+            if (DrawButton(inferenceRect, new GUIContent("AI", "Run downloaded model"), inferenceButtonStyle, !busy))
+            {
+                ToggleInferenceMode();
             }
 
             y += ButtonHeight + ButtonGap;
@@ -202,6 +240,7 @@ namespace EnvForge.Navigation.Cloud
                 response =>
                 {
                     submissionId = response.submission_id;
+                    jobHistoryStore.UpsertSubmittedJob(submissionId, scenario, activeJobTrainerSummary);
                     status = $"Cloud: submitted {submissionId}";
                 },
                 error =>
@@ -258,6 +297,7 @@ namespace EnvForge.Navigation.Cloud
                 result =>
                 {
                     latestResult = result;
+                    jobHistoryStore.UpsertResult(submissionId, result);
                     status = $"Cloud: {result.status}";
                 },
                 error => status = $"Cloud poll failed: {error}");
@@ -268,10 +308,14 @@ namespace EnvForge.Navigation.Cloud
         {
             busy = true;
             status = "Cloud: downloading replay";
-            yield return artifactDownloader.DownloadText(
+            string localPath = GetLocalReplayPath();
+            yield return artifactDownloader.DownloadFile(
                 GetResultArtifacts().replay_log,
-                jsonLines =>
+                localPath,
+                savedPath =>
                 {
+                    string jsonLines = File.ReadAllText(savedPath);
+                    jobHistoryStore.SetLocalReplayPath(submissionId, savedPath);
                     LoadReplaySteps(ReplayLogSerializer.FromJsonLines(jsonLines), "Downloaded replay");
                     status = "Cloud: replay loaded";
                 },
@@ -291,7 +335,7 @@ namespace EnvForge.Navigation.Cloud
 
             ResultArtifactsDto artifacts = GetResultArtifacts();
             if (artifacts == null ||
-                (artifacts.replay_log == null && artifacts.onnx_model == null && artifacts.sentis_model == null))
+                (artifacts.replay_log == null && artifacts.onnx_model == null))
             {
                 status = "Cloud: no downloadable artifacts";
                 showTrainingSettings = false;
@@ -304,7 +348,7 @@ namespace EnvForge.Navigation.Cloud
                 yield return DownloadReplay();
             }
 
-            if (artifacts.onnx_model != null || artifacts.sentis_model != null)
+            if (artifacts.onnx_model != null)
             {
                 yield return DownloadModelArtifacts();
             }
@@ -317,12 +361,10 @@ namespace EnvForge.Navigation.Cloud
             ResultArtifactsDto artifacts = GetResultArtifacts();
             if (artifacts.onnx_model != null)
             {
-                yield return DownloadArtifactFile(artifacts.onnx_model, Path.Combine(outputDir, "policy.onnx"));
-            }
-
-            if (artifacts.sentis_model != null)
-            {
-                yield return DownloadArtifactFile(artifacts.sentis_model, Path.Combine(outputDir, "policy.sentis.onnx"));
+                yield return DownloadArtifactFile(
+                    artifacts.onnx_model,
+                    Path.Combine(outputDir, "policy.onnx"),
+                    savedPath => jobHistoryStore.SetLocalOnnxPath(submissionId, savedPath));
             }
 
             busy = false;
@@ -436,13 +478,23 @@ namespace EnvForge.Navigation.Cloud
             return timesteps.ToString(CultureInfo.InvariantCulture);
         }
 
-        private IEnumerator DownloadArtifactFile(ArtifactLocationDto artifact, string localPath)
+        private string GetLocalReplayPath()
+        {
+            string outputDir = Path.Combine(Application.persistentDataPath, "EnvForge", submissionId ?? "latest", "replay");
+            return Path.Combine(outputDir, "replay.jsonl");
+        }
+
+        private IEnumerator DownloadArtifactFile(ArtifactLocationDto artifact, string localPath, Action<string> onSaved = null)
         {
             status = $"Cloud: downloading {Path.GetFileName(localPath)}";
             yield return artifactDownloader.DownloadFile(
                 artifact,
                 localPath,
-                savedPath => status = $"Cloud: saved {savedPath}",
+                savedPath =>
+                {
+                    onSaved?.Invoke(savedPath);
+                    status = $"Cloud: saved {savedPath}";
+                },
                 error => status = $"Model download failed: {error}");
         }
 
@@ -466,6 +518,12 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Label("Loaded Replay", labelStyle);
             GUILayout.Label(loadedReplaySummary ?? "Replay: none", detailStyle);
             GUILayout.Label($"Artifacts: replay {FormatArtifactState(GetResultArtifacts()?.replay_log)} · model {FormatModelArtifactState(GetResultArtifacts())}", detailStyle);
+            GUILayout.Label(FormatHistorySummary(), detailStyle);
+            GUILayout.Label(FormatInferenceSummary(), detailStyle);
+            if (!string.IsNullOrWhiteSpace(inferenceController?.LastErrorDetails))
+            {
+                GUILayout.Label($"Inference error: {inferenceController.LastErrorDetails}", detailStyle);
+            }
 
             if (!string.IsNullOrWhiteSpace(status))
             {
@@ -495,7 +553,83 @@ namespace EnvForge.Navigation.Cloud
 
         private static string FormatModelArtifactState(ResultArtifactsDto artifacts)
         {
-            return artifacts?.sentis_model == null && artifacts?.onnx_model == null ? "not ready" : "ready";
+            return artifacts?.onnx_model == null ? "not ready" : "ready";
+        }
+
+        private string FormatHistorySummary()
+        {
+            if (jobHistoryStore == null || jobHistoryStore.Jobs.Count == 0)
+            {
+                return "History: none";
+            }
+
+            EnvForgeJobRecordDto latestJob = jobHistoryStore.Latest;
+            string replay = string.IsNullOrWhiteSpace(latestJob.local_replay_path) ? "replay -" : "replay saved";
+            string model = string.IsNullOrWhiteSpace(latestJob.local_onnx_path)
+                ? "model -"
+                : "model saved";
+            return $"History: {jobHistoryStore.Jobs.Count} jobs · latest {Shorten(latestJob.submission_id, 18)} · {replay} · {model}";
+        }
+
+        private string FormatInferenceSummary()
+        {
+            if (inferenceController == null)
+            {
+                return "Inference: unavailable";
+            }
+
+            return $"{inferenceController.StatusSummary} · {inferenceController.LastActionSummary}";
+        }
+
+        private void ToggleInferenceMode()
+        {
+            if (inferenceController == null)
+            {
+                status = "Inference: controller unavailable";
+                return;
+            }
+
+            if (inferenceController.IsRunning)
+            {
+                inferenceController.StopInference();
+                status = inferenceController.StatusSummary;
+                return;
+            }
+
+            string modelPath = GetLatestLocalOnnxModelPath();
+            if (string.IsNullOrEmpty(modelPath))
+            {
+                status = "Inference: download ONNX model first";
+                showTrainingSettings = false;
+                showJobDetails = true;
+                return;
+            }
+
+            if (inferenceController.StartInference(modelPath, out string error))
+            {
+                status = inferenceController.StatusSummary;
+                return;
+            }
+
+            status = "Inference failed: see Console / Job details";
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                Debug.LogError($"Inference failed: {error}");
+            }
+
+            showTrainingSettings = false;
+            showJobDetails = true;
+        }
+
+        private string GetLatestLocalOnnxModelPath()
+        {
+            EnvForgeJobRecordDto latestJob = jobHistoryStore?.Latest;
+            if (latestJob == null || string.IsNullOrWhiteSpace(latestJob.local_onnx_path))
+            {
+                return string.Empty;
+            }
+
+            return latestJob.local_onnx_path;
         }
 
         private string FormatProgressSummary()
