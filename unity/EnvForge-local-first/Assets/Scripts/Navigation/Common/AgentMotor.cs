@@ -35,7 +35,7 @@ namespace EnvForge.Navigation
 
         public void SetInput(float forward, float turn)
         {
-            forwardInput = Mathf.Clamp01(forward) * forwardInputScale;
+            forwardInput = Mathf.Clamp(forward, -1f, 1f) * forwardInputScale;
             turnInput = Mathf.Clamp(turn, -1f, 1f);
         }
 

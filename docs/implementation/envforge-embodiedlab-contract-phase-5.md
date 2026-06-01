@@ -145,6 +145,9 @@ Phase 5 の完了後、または Phase 5 を仕上げながら進める実装 TO
   job history と artifact 回収導線を用意する。
 - Replay 表示欄に reward、終了理由、学習概要を読みやすく表示する。表示欄が
   切れないよう、Replay overlay と Job details の縦幅も調整する。
+- 細かい HUD / UI の見た目は後日まとめて再設計する。今回の暫定対応では、右上の
+  Cloud panel、左下の Replay panel、`Job details` の情報は読める状態を優先し、
+  余白、行揃え、ボタン名、色、折り返し、下端はみ出しを継続改善 TODO とする。
 - 右上のクラウド操作パネルのデザインを再考する。現状は情報が見えることを優先した
   暫定 HUD であり、見た目、余白、ボタン配置、状態表示の視線誘導を改めて設計する。
 - 右上のクラウド操作パネルと左下の Replay パネルのフォントサイズを再設計する。
@@ -153,6 +156,10 @@ Phase 5 の完了後、または Phase 5 を仕上げながら進める実装 TO
 - job history の表示 UI を再設計する。現状は `Job details` に保存件数と latest job
   の artifact readiness を最小表示するだけなので、後続で job 一覧、選択、再取得、
   local artifact の開き直しを扱える形にする。
+- 推論 action の契約を前進専用に保つ。EmbodiedLab 側の action space / replay /
+  exported ONNX は `forward: 0..1`、`turn: -1..1` に揃える。EnvForge 側は
+  推論モデルの出力を原則そのまま実行し、契約外の負の `forward` は UI に警告として
+  表示する。負の `forward` が出る古いモデルは再学習対象とする。
 - 壁パーツをユーザーが自由に立てられるようにし、その配置を Scenario Bundle に
   反映する。
 - コードを現行の主経路に合わせてきれいにシンプルにする。過去の MVP や旧実験の

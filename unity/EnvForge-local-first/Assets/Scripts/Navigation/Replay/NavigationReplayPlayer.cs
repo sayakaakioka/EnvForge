@@ -9,14 +9,15 @@ namespace EnvForge.Navigation.Replay
     public sealed class NavigationReplayPlayer : MonoBehaviour
     {
         private const float Padding = 12f;
-        private const float Width = 500f;
-        private const float Height = 360f;
-        private const float ButtonHeight = 74f;
-        private const float ButtonWidth = 88f;
-        private const float ButtonGap = 7f;
-        private const int FontSize = 22;
-        private const int TitleFontSize = 28;
-        private const int ButtonFontSize = 42;
+        private const float Width = 680f;
+        private const float Height = 320f;
+        private const float BottomMargin = 32f;
+        private const float ButtonHeight = 52f;
+        private const float ButtonWidth = 70f;
+        private const float ButtonGap = 8f;
+        private const int FontSize = 26;
+        private const int TitleFontSize = 30;
+        private const int ButtonFontSize = 26;
         private static readonly Color IconColor = new(0.72f, 0.95f, 1f, 1f);
 
         [SerializeField] private float playbackSpeed = 1f;
@@ -114,6 +115,23 @@ namespace EnvForge.Navigation.Replay
             status = HasReplay ? "Replay: stopped" : "Replay: no log loaded";
         }
 
+        public void ReleaseControl()
+        {
+            isPlaying = false;
+            if (targetMotor != null)
+            {
+                targetMotor.enabled = true;
+                targetMotor.Stop();
+            }
+
+            if (targetBody != null)
+            {
+                targetBody.isKinematic = false;
+            }
+
+            status = HasReplay ? "Replay: released" : "Replay: no log loaded";
+        }
+
         public void StepForward()
         {
             if (!HasReplay)
@@ -178,13 +196,13 @@ namespace EnvForge.Navigation.Replay
             EnsureStyles();
             float boxWidth = Mathf.Min(Width, Screen.width - Padding * 2f);
             float boxHeight = Mathf.Min(Height, Screen.height - Padding * 2f);
-            Rect boxRect = new(Padding, Screen.height - boxHeight - Padding, boxWidth, boxHeight);
+            Rect boxRect = new(Padding, Screen.height - boxHeight - BottomMargin, boxWidth, boxHeight);
             GUI.Box(boxRect, GUIContent.none, boxStyle);
 
             Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f);
-            GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 34f), "Replay", titleStyle);
+            GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 36f), "Replay", titleStyle);
 
-            float buttonTop = contentRect.y + 46f;
+            float buttonTop = contentRect.y + 44f;
             float buttonLeft = contentRect.x;
             if (DrawIconButton(new Rect(buttonLeft, buttonTop, ButtonWidth, ButtonHeight), previousIcon, "Previous step"))
             {
@@ -215,9 +233,9 @@ namespace EnvForge.Navigation.Replay
                 StepForward();
             }
 
-            float detailTop = buttonTop + ButtonHeight + 10f;
-            GUI.Label(new Rect(contentRect.x, detailTop, contentRect.width, 32f), FormatHudStatus(), labelStyle);
-            GUI.Label(new Rect(contentRect.x, detailTop + 34f, contentRect.width, contentRect.yMax - detailTop - 34f), FormatCurrentStep(), labelStyle);
+            float detailTop = buttonTop + ButtonHeight + 12f;
+            GUI.Label(new Rect(contentRect.x, detailTop, contentRect.width, 36f), FormatHudStatus(), labelStyle);
+            GUI.Label(new Rect(contentRect.x, detailTop + 40f, contentRect.width, contentRect.yMax - detailTop - 40f), FormatCurrentStep(), labelStyle);
         }
 
         private void DisableLiveControl()
@@ -328,10 +346,10 @@ namespace EnvForge.Navigation.Replay
 
             string action = FormatNamedValues(step.action?.values);
             string reward = FormatNamedValues(step.reward?.components);
-            return $"job={Shorten(step.job_id, 18)}  scenario={step.scenario_id ?? "-"}\n" +
-                   $"step {step.step_index + 1}/{steps.Count}  t={step.time_seconds:0.00}s\n" +
-                   $"reward={step.reward?.total:0.000} [{reward}]\n" +
-                   $"action [{action}]  end={step.termination_reason ?? "-"}";
+            return $"step {step.step_index + 1}/{steps.Count}  t={step.time_seconds:0.00}s  job={Shorten(step.job_id, 12)}\n" +
+                   $"reward {step.reward?.total:0.000}  {Shorten(reward, 48)}\n" +
+                   $"action {Shorten(action, 58)}\n" +
+                   $"end {step.termination_reason ?? "-"}";
         }
 
         private string FormatHudStatus()
@@ -431,7 +449,7 @@ namespace EnvForge.Navigation.Replay
             bool pressed = GUI.Button(rect, new GUIContent(string.Empty, tooltip), buttonStyle);
             if (Event.current.type == EventType.Repaint && icon != null)
             {
-                Rect iconRect = new(rect.x + 18f, rect.y + 14f, rect.width - 36f, rect.height - 28f);
+                Rect iconRect = new(rect.x + 18f, rect.y + 12f, rect.width - 36f, rect.height - 24f);
                 GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit, true);
             }
 

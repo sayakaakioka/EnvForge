@@ -119,6 +119,12 @@ namespace EnvForge.Navigation.Inference
             lastActionSummary = "action waiting";
             lastErrorDetails = string.Empty;
 
+            if (motor != null)
+            {
+                motor.enabled = true;
+                motor.Stop();
+            }
+
             if (liveController != null)
             {
                 liveController.enabled = false;
@@ -184,15 +190,30 @@ namespace EnvForge.Navigation.Inference
                     return;
                 }
 
-                float forward = Mathf.Clamp01(actionTensor.GetValue(0));
-                float turn = Mathf.Clamp(actionTensor.GetValue(1), -1f, 1f);
+                float rawForward = actionTensor.GetValue(0);
+                float rawTurn = actionTensor.GetValue(1);
+                float forward = Mathf.Clamp(rawForward, -1f, 1f);
+                float turn = Mathf.Clamp(rawTurn, -1f, 1f);
                 motor.SetInput(forward, turn);
-                lastActionSummary = $"action f {forward:0.00} · t {turn:0.00}";
+                lastActionSummary = FormatActionSummary(rawForward, rawTurn, forward, turn);
+                statusSummary = rawForward < -0.0001f
+                    ? "Inference: contract violation"
+                    : $"Inference: running {Path.GetFileName(modelPath)}";
             }
             catch (Exception ex)
             {
                 StopWithError("Inference: run failed", ex.ToString());
             }
+        }
+
+        private static string FormatActionSummary(
+            float rawForward,
+            float rawTurn,
+            float forward,
+            float turn)
+        {
+            string warning = rawForward < -0.0001f ? " · CONTRACT VIOLATION forward<0" : string.Empty;
+            return $"action raw f {rawForward:0.00} t {rawTurn:0.00} · applied f {forward:0.00} t {turn:0.00}{warning}";
         }
 
         private void StopWithError(string summary, string details = "")

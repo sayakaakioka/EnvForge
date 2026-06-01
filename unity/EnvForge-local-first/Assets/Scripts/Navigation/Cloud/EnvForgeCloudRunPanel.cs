@@ -13,19 +13,19 @@ namespace EnvForge.Navigation.Cloud
     public sealed class EnvForgeCloudRunPanel : MonoBehaviour
     {
         private const float Padding = 12f;
-        private const float Width = 560f;
-        private const float Height = 260f;
+        private const float Width = 640f;
+        private const float Height = 320f;
         private const float DetailsHeight = 560f;
-        private const float ButtonHeight = 52f;
+        private const float ButtonHeight = 54f;
         private const float ButtonGap = 8f;
-        private const float StatusHeight = 90f;
-        private const float StatusLineHeight = 30f;
-        private const float StatusLabelWidth = 84f;
-        private const int FontSize = 18;
-        private const int StatusFontSize = 20;
+        private const float StatusHeight = 126f;
+        private const float StatusLineHeight = 40f;
+        private const float StatusLabelWidth = 124f;
+        private const int FontSize = 26;
+        private const int StatusFontSize = 30;
         private const int SettingsFontSize = 28;
-        private const int ButtonFontSize = 30;
-        private const int PrimaryButtonFontSize = 30;
+        private const int ButtonFontSize = 26;
+        private const int PrimaryButtonFontSize = 26;
         private const float SettingsWidth = 640f;
         private const float SettingsHeight = 780f;
         private const float SettingsButtonHeight = 58f;
@@ -166,10 +166,11 @@ namespace EnvForge.Navigation.Cloud
 
             if (DrawButton(replayRect, new GUIContent("REPLAY", "Load replay"), primaryButtonStyle, !busy))
             {
-                LoadBundledReplay();
+                LoadLatestReplay();
             }
 
-            if (DrawButton(cfgRect, new GUIContent("CFG", "Training settings"), buttonStyle, !busy))
+            GUIStyle cfgButtonStyle = showTrainingSettings ? selectedButtonStyle : buttonStyle;
+            if (DrawButton(cfgRect, new GUIContent("CFG", "Training settings"), cfgButtonStyle, !busy))
             {
                 showTrainingSettings = !showTrainingSettings;
                 showJobDetails = false;
@@ -191,27 +192,28 @@ namespace EnvForge.Navigation.Cloud
             Rect detailsRect = new(pollRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
             Rect downloadRect = new(detailsRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
 
-            if (DrawButton(submitRect, new GUIContent("↑", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
+            if (DrawButton(submitRect, new GUIContent("SUBMIT", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
             {
                 StartCoroutine(SubmitAndTrain());
             }
 
-            if (DrawButton(pollRect, new GUIContent("↻", "Poll result"), buttonStyle, !busy && apiClient != null && !string.IsNullOrEmpty(submissionId)))
+            if (DrawButton(pollRect, new GUIContent("POLL", "Poll result"), buttonStyle, !busy && apiClient != null && !string.IsNullOrEmpty(submissionId)))
             {
                 StartCoroutine(PollResult());
             }
 
-            if (DrawButton(detailsRect, new GUIContent("▤", "Job details"), buttonStyle, !busy))
+            GUIStyle detailsButtonStyle = showJobDetails ? selectedButtonStyle : buttonStyle;
+            if (DrawButton(detailsRect, new GUIContent("JOB", "Job details"), detailsButtonStyle, !busy))
             {
                 ToggleJobDetails();
             }
 
-            if (DrawButton(downloadRect, new GUIContent("↓", "Download artifacts"), buttonStyle, !busy))
+            if (DrawButton(downloadRect, new GUIContent("GET", "Download artifacts"), buttonStyle, !busy))
             {
                 StartCoroutine(DownloadAvailableArtifacts());
             }
 
-            y += ButtonHeight + ButtonGap * 1.5f;
+            y += ButtonHeight + ButtonGap * 2f;
             DrawHudStatus(new Rect(contentRect.x, y, contentRect.width, StatusHeight));
         }
 
@@ -392,12 +394,12 @@ namespace EnvForge.Navigation.Cloud
 
             Rect scenarioLabelRect = new(rect.x, rect.y + StatusLineHeight, StatusLabelWidth, StatusLineHeight);
             Rect scenarioValueRect = new(scenarioLabelRect.xMax, scenarioLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
-            GUI.Label(scenarioLabelRect, "scenario", labelStyle);
+            GUI.Label(scenarioLabelRect, "SCENE", labelStyle);
             GUI.Label(scenarioValueRect, lines[1], detailStyle);
 
             Rect trainerLabelRect = new(rect.x, rect.y + StatusLineHeight * 2f, StatusLabelWidth, StatusLineHeight);
             Rect trainerValueRect = new(trainerLabelRect.xMax, trainerLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
-            GUI.Label(trainerLabelRect, "trainer", labelStyle);
+            GUI.Label(trainerLabelRect, "TRAIN", labelStyle);
             GUI.Label(trainerValueRect, lines[2], detailStyle);
         }
 
@@ -605,6 +607,7 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
+            replayPlayer?.ReleaseControl();
             if (inferenceController.StartInference(modelPath, out string error))
             {
                 status = inferenceController.StatusSummary;
@@ -804,6 +807,42 @@ namespace EnvForge.Navigation.Cloud
             status = "Cloud: demo replay loaded";
         }
 
+        private void LoadLatestReplay()
+        {
+            string replayPath = GetLatestLocalReplayPath();
+            if (string.IsNullOrWhiteSpace(replayPath))
+            {
+                LoadBundledReplay();
+                return;
+            }
+
+            try
+            {
+                string jsonLines = File.ReadAllText(replayPath);
+                LoadReplaySteps(ReplayLogSerializer.FromJsonLines(jsonLines), "Latest downloaded replay");
+                status = "Cloud: latest replay loaded";
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Latest replay load failed: {ex}");
+                status = "Latest replay load failed; loading demo";
+                LoadBundledReplay();
+            }
+        }
+
+        private string GetLatestLocalReplayPath()
+        {
+            EnvForgeJobRecordDto latestJob = jobHistoryStore?.Latest;
+            if (latestJob == null ||
+                string.IsNullOrWhiteSpace(latestJob.local_replay_path) ||
+                !File.Exists(latestJob.local_replay_path))
+            {
+                return string.Empty;
+            }
+
+            return latestJob.local_replay_path;
+        }
+
         private void LoadReplaySteps(IReadOnlyList<ReplayLogStepDto> steps, string source)
         {
             replayPlayer.LoadSteps(steps);
@@ -902,8 +941,8 @@ namespace EnvForge.Navigation.Cloud
             buttonStyle.focused.textColor = Color.white;
 
             selectedButtonStyle = new GUIStyle(buttonStyle);
-            Texture2D selectedButtonBackground = CreateTexture(new Color(0.1f, 0.8f, 0.75f, 1f));
-            Texture2D selectedButtonHoverBackground = CreateTexture(new Color(0.2f, 0.95f, 0.85f, 1f));
+            Texture2D selectedButtonBackground = CreateTexture(new Color(1f, 0.72f, 0.12f, 1f));
+            Texture2D selectedButtonHoverBackground = CreateTexture(new Color(1f, 0.82f, 0.24f, 1f));
             selectedButtonStyle.normal.background = selectedButtonBackground;
             selectedButtonStyle.hover.background = selectedButtonHoverBackground;
             selectedButtonStyle.active.background = selectedButtonHoverBackground;
@@ -935,7 +974,7 @@ namespace EnvForge.Navigation.Cloud
 
             detailStyle = new GUIStyle(labelStyle)
             {
-                fontSize = 18,
+                fontSize = FontSize,
                 fontStyle = FontStyle.Normal,
                 wordWrap = true,
                 alignment = TextAnchor.MiddleLeft,
