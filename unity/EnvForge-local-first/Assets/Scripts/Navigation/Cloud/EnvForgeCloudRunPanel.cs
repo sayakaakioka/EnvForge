@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using EnvForge.Navigation.Contracts;
@@ -11,13 +12,16 @@ namespace EnvForge.Navigation.Cloud
     public sealed class EnvForgeCloudRunPanel : MonoBehaviour
     {
         private const float Padding = 12f;
-        private const float Width = 330f;
-        private const float Height = 280f;
-        private const float DetailsHeight = 300f;
-        private const float ButtonHeight = 58f;
-        private const float StatusHeight = 46f;
+        private const float Width = 560f;
+        private const float Height = 260f;
+        private const float DetailsHeight = 560f;
+        private const float ButtonHeight = 52f;
+        private const float ButtonGap = 8f;
+        private const float StatusHeight = 90f;
+        private const float StatusLineHeight = 30f;
+        private const float StatusLabelWidth = 84f;
         private const int FontSize = 18;
-        private const int StatusFontSize = 24;
+        private const int StatusFontSize = 20;
         private const int SettingsFontSize = 28;
         private const int ButtonFontSize = 30;
         private const int PrimaryButtonFontSize = 30;
@@ -37,7 +41,10 @@ namespace EnvForge.Navigation.Cloud
         private EnvForgeArtifactDownloader artifactDownloader;
         private ResultDocumentDto latestResult;
         private string submissionId;
+        private string activeScenarioId;
         private string activeJobSettingsSummary;
+        private string activeJobTrainerSummary;
+        private string loadedReplaySummary;
         private string status = "Cloud: idle";
         private bool busy;
         private bool showTrainingSettings;
@@ -46,6 +53,7 @@ namespace EnvForge.Navigation.Cloud
         private Vector2 trainingSettingsScroll;
         private Vector2 jobDetailsScroll;
         private GUIStyle buttonStyle;
+        private GUIStyle selectedButtonStyle;
         private GUIStyle primaryButtonStyle;
         private GUIStyle labelStyle;
         private GUIStyle statusStyle;
@@ -102,57 +110,7 @@ namespace EnvForge.Navigation.Cloud
             float boxHeight = Mathf.Min(Height, Screen.height - Padding * 2f);
             Rect boxRect = new(Screen.width - boxWidth - Padding, Padding, boxWidth, boxHeight);
             GUI.Box(boxRect, GUIContent.none, boxStyle);
-
-            GUILayout.BeginArea(new Rect(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f));
-            GUI.enabled = !busy;
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button(new GUIContent("▶ REPLAY", "Load replay"), primaryButtonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                LoadBundledReplay();
-            }
-
-            if (GUILayout.Button(new GUIContent("CFG", "Training settings"), buttonStyle, GUILayout.Width(92f), GUILayout.Height(ButtonHeight)))
-            {
-                showTrainingSettings = !showTrainingSettings;
-                showJobDetails = false;
-                SyncTextFromTrainingSettings();
-            }
-
-            GUILayout.EndHorizontal();
-            GUILayout.Space(8f);
-
-            GUILayout.BeginHorizontal();
-            GUI.enabled = !busy && apiClient != null && sceneBuilder != null;
-            if (GUILayout.Button(new GUIContent("↑", "Submit and train"), buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                StartCoroutine(SubmitAndTrain());
-            }
-
-            GUI.enabled = !busy && apiClient != null && !string.IsNullOrEmpty(submissionId);
-            if (GUILayout.Button(new GUIContent("↻", "Poll result"), buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                StartCoroutine(PollResult());
-            }
-
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            GUI.enabled = !busy;
-            if (GUILayout.Button(new GUIContent("▤", "Job details"), buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                ToggleJobDetails();
-            }
-
-            GUI.enabled = !busy;
-            if (GUILayout.Button(new GUIContent("↓", "Download artifacts"), buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                StartCoroutine(DownloadAvailableArtifacts());
-            }
-
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
-            GUILayout.Space(8f);
-            GUILayout.Label(FormatHudStatus(), statusStyle, GUILayout.Height(StatusHeight));
-            GUILayout.EndArea();
+            DrawMainPanel(boxRect);
 
             if (showTrainingSettings)
             {
@@ -167,14 +125,77 @@ namespace EnvForge.Navigation.Cloud
             }
         }
 
+        private void DrawMainPanel(Rect boxRect)
+        {
+            Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxRect.width - Padding * 2f, boxRect.height - Padding * 2f);
+            float y = contentRect.y;
+
+            float twoButtonWidth = (contentRect.width - ButtonGap) * 0.5f;
+            Rect replayRect = new(contentRect.x, y, twoButtonWidth, ButtonHeight);
+            Rect cfgRect = new(replayRect.xMax + ButtonGap, y, twoButtonWidth, ButtonHeight);
+
+            if (DrawButton(replayRect, new GUIContent("▶ REPLAY", "Load replay"), primaryButtonStyle, !busy))
+            {
+                LoadBundledReplay();
+            }
+
+            if (DrawButton(cfgRect, new GUIContent("CFG", "Training settings"), buttonStyle, !busy))
+            {
+                showTrainingSettings = !showTrainingSettings;
+                showJobDetails = false;
+                SyncTextFromTrainingSettings();
+            }
+
+            y += ButtonHeight + ButtonGap;
+            float fourButtonWidth = (contentRect.width - ButtonGap * 3f) * 0.25f;
+            Rect submitRect = new(contentRect.x, y, fourButtonWidth, ButtonHeight);
+            Rect pollRect = new(submitRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
+            Rect detailsRect = new(pollRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
+            Rect downloadRect = new(detailsRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
+
+            if (DrawButton(submitRect, new GUIContent("↑", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
+            {
+                StartCoroutine(SubmitAndTrain());
+            }
+
+            if (DrawButton(pollRect, new GUIContent("↻", "Poll result"), buttonStyle, !busy && apiClient != null && !string.IsNullOrEmpty(submissionId)))
+            {
+                StartCoroutine(PollResult());
+            }
+
+            if (DrawButton(detailsRect, new GUIContent("▤", "Job details"), buttonStyle, !busy))
+            {
+                ToggleJobDetails();
+            }
+
+            if (DrawButton(downloadRect, new GUIContent("↓", "Download artifacts"), buttonStyle, !busy))
+            {
+                StartCoroutine(DownloadAvailableArtifacts());
+            }
+
+            y += ButtonHeight + ButtonGap * 1.5f;
+            DrawHudStatus(new Rect(contentRect.x, y, contentRect.width, StatusHeight));
+        }
+
+        private static bool DrawButton(Rect rect, GUIContent content, GUIStyle style, bool enabled)
+        {
+            bool previousEnabled = GUI.enabled;
+            GUI.enabled = enabled;
+            bool clicked = GUI.Button(rect, content, style);
+            GUI.enabled = previousEnabled;
+            return clicked;
+        }
+
         private IEnumerator SubmitAndTrain()
         {
             busy = true;
             latestResult = null;
-            activeJobSettingsSummary = FormatTrainingSummary(sceneBuilder.TrainingSettings);
             status = "Cloud: submitting scenario";
 
             ScenarioBundleDto scenario = sceneBuilder.BuildScenarioBundle();
+            activeScenarioId = scenario.scenario_id;
+            activeJobSettingsSummary = FormatScenarioSummary(scenario);
+            activeJobTrainerSummary = FormatScenarioTrainerSummary(scenario);
             bool failed = false;
             yield return apiClient.SubmitScenario(
                 scenario,
@@ -251,7 +272,7 @@ namespace EnvForge.Navigation.Cloud
                 GetResultArtifacts().replay_log,
                 jsonLines =>
                 {
-                    replayPlayer.LoadSteps(ReplayLogSerializer.FromJsonLines(jsonLines));
+                    LoadReplaySteps(ReplayLogSerializer.FromJsonLines(jsonLines), "Downloaded replay");
                     status = "Cloud: replay loaded";
                 },
                 error => status = $"Replay download failed: {error}");
@@ -322,7 +343,23 @@ namespace EnvForge.Navigation.Cloud
             return string.Equals(latestResult?.status, "completed", StringComparison.OrdinalIgnoreCase);
         }
 
-        private string FormatHudStatus()
+        private void DrawHudStatus(Rect rect)
+        {
+            string[] lines = FormatHudStatusLines();
+            GUI.Label(new Rect(rect.x, rect.y, rect.width, StatusLineHeight), lines[0], statusStyle);
+
+            Rect scenarioLabelRect = new(rect.x, rect.y + StatusLineHeight, StatusLabelWidth, StatusLineHeight);
+            Rect scenarioValueRect = new(scenarioLabelRect.xMax, scenarioLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
+            GUI.Label(scenarioLabelRect, "scenario", labelStyle);
+            GUI.Label(scenarioValueRect, lines[1], detailStyle);
+
+            Rect trainerLabelRect = new(rect.x, rect.y + StatusLineHeight * 2f, StatusLabelWidth, StatusLineHeight);
+            Rect trainerValueRect = new(trainerLabelRect.xMax, trainerLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
+            GUI.Label(trainerLabelRect, "trainer", labelStyle);
+            GUI.Label(trainerValueRect, lines[2], detailStyle);
+        }
+
+        private string[] FormatHudStatusLines()
         {
             string resultStatus = latestResult?.status;
             string hudStatus;
@@ -353,8 +390,15 @@ namespace EnvForge.Navigation.Cloud
                 hudStatus = string.IsNullOrEmpty(submissionId) ? "IDLE" : "WAITING";
             }
 
-            string settingsSummary = GetVisibleSettingsSummary();
-            return string.IsNullOrEmpty(settingsSummary) ? hudStatus : $"{hudStatus} · {settingsSummary}";
+            string scenario = !string.IsNullOrEmpty(activeScenarioId)
+                ? activeScenarioId
+                : "none";
+            return new[]
+            {
+                hudStatus,
+                scenario,
+                GetVisibleTrainerSummary(),
+            };
         }
 
         private string GetVisibleSettingsSummary()
@@ -410,10 +454,18 @@ namespace EnvForge.Navigation.Cloud
 
             GUILayout.Label("Result", statusStyle);
             GUILayout.Label($"Status: {latestResult?.status ?? "none"}", detailStyle);
-            GUILayout.Label($"Config: {GetVisibleSettingsSummary()}", detailStyle);
+
+            GUILayout.Space(8f);
+            GUILayout.Label("Submitted Job", labelStyle);
             GUILayout.Label($"Job: {Shorten(submissionId, 18)}", detailStyle);
-            GUILayout.Label($"Replay: {FormatArtifactState(GetResultArtifacts()?.replay_log)}", detailStyle);
-            GUILayout.Label($"Model: {FormatModelArtifactState(GetResultArtifacts())}", detailStyle);
+            GUILayout.Label($"Scenario: {activeScenarioId ?? "none"}", detailStyle);
+            GUILayout.Label($"Trainer: {GetVisibleTrainerSummary()}", detailStyle);
+            GUILayout.Label(FormatProgressSummary(), detailStyle);
+
+            GUILayout.Space(8f);
+            GUILayout.Label("Loaded Replay", labelStyle);
+            GUILayout.Label(loadedReplaySummary ?? "Replay: none", detailStyle);
+            GUILayout.Label($"Artifacts: replay {FormatArtifactState(GetResultArtifacts()?.replay_log)} · model {FormatModelArtifactState(GetResultArtifacts())}", detailStyle);
 
             if (!string.IsNullOrWhiteSpace(status))
             {
@@ -446,6 +498,21 @@ namespace EnvForge.Navigation.Cloud
             return artifacts?.sentis_model == null && artifacts?.onnx_model == null ? "not ready" : "ready";
         }
 
+        private string FormatProgressSummary()
+        {
+            ProgressDto progress = latestResult?.progress;
+            if (progress == null)
+            {
+                return "Progress: none";
+            }
+
+            string steps = progress.total_steps > 0
+                ? $"{FormatSteps(progress.current_step)}/{FormatSteps(progress.total_steps)}"
+                : FormatSteps(progress.current_step);
+            string phase = string.IsNullOrWhiteSpace(progress.phase) ? latestResult?.status : progress.phase;
+            return $"Progress: {phase ?? "unknown"} · {steps}";
+        }
+
         private static string Shorten(string value, int maxLength)
         {
             if (string.IsNullOrEmpty(value))
@@ -461,13 +528,15 @@ namespace EnvForge.Navigation.Cloud
             GUI.Box(panelRect, GUIContent.none, boxStyle);
             GUILayout.BeginArea(new Rect(panelRect.x + Padding, panelRect.y + Padding, panelRect.width - Padding * 2f, panelRect.height - Padding * 2f));
             trainingSettingsScroll = GUILayout.BeginScrollView(trainingSettingsScroll);
+            GUILayout.Label($"CFG: {sceneBuilder.TrainingSettings.PresetName} · {(showRewardSettings ? "Reward" : "Training")}", statusStyle);
+            GUILayout.Space(8f);
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Training", showRewardSettings ? buttonStyle : primaryButtonStyle, GUILayout.Height(SettingsButtonHeight)))
+            if (GUILayout.Button("Training", showRewardSettings ? buttonStyle : selectedButtonStyle, GUILayout.Height(SettingsButtonHeight)))
             {
                 showRewardSettings = false;
             }
 
-            if (GUILayout.Button("Reward", showRewardSettings ? primaryButtonStyle : buttonStyle, GUILayout.Height(SettingsButtonHeight)))
+            if (GUILayout.Button("Reward", showRewardSettings ? selectedButtonStyle : buttonStyle, GUILayout.Height(SettingsButtonHeight)))
             {
                 showRewardSettings = true;
             }
@@ -476,13 +545,13 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Space(8f);
 
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Smoke", buttonStyle, GUILayout.Height(SettingsButtonHeight)))
+            if (GUILayout.Button("Smoke", GetPresetButtonStyle("Smoke"), GUILayout.Height(SettingsButtonHeight)))
             {
                 sceneBuilder.TrainingSettings.ApplySmokePreset();
                 SyncTextFromTrainingSettings();
             }
 
-            if (GUILayout.Button("MVP", buttonStyle, GUILayout.Height(SettingsButtonHeight)))
+            if (GUILayout.Button("MVP", GetPresetButtonStyle("MVP"), GUILayout.Height(SettingsButtonHeight)))
             {
                 sceneBuilder.TrainingSettings.ApplyMvpPreset();
                 SyncTextFromTrainingSettings();
@@ -507,7 +576,6 @@ namespace EnvForge.Navigation.Cloud
         private void DrawTrainerSettings()
         {
             GUILayout.Label("Training", settingsLabelStyle);
-            GUILayout.Label($"Preset: {sceneBuilder.TrainingSettings.PresetName}", detailStyle);
             DrawIntField("timesteps", ref timestepsText, value => sceneBuilder.TrainingSettings.Timesteps = value);
             DrawIntField("max episode", ref maxEpisodeStepsText, value => sceneBuilder.TrainingSettings.MaxEpisodeSteps = value);
             DrawIntField("seed", ref seedText, value => sceneBuilder.TrainingSettings.Seed = value);
@@ -522,7 +590,6 @@ namespace EnvForge.Navigation.Cloud
         private void DrawRewardSettings()
         {
             GUILayout.Label("Reward", settingsLabelStyle);
-            GUILayout.Label($"Preset: {sceneBuilder.TrainingSettings.PresetName}", detailStyle);
             DrawFloatField("goal", ref goalReachedRewardText, value => sceneBuilder.TrainingSettings.GoalReachedReward = value);
             DrawFloatField("progress", ref goalProgressRewardText, value => sceneBuilder.TrainingSettings.GoalProgressReward = value);
             DrawFloatField("collision", ref collisionPenaltyText, value => sceneBuilder.TrainingSettings.CollisionPenalty = value);
@@ -599,13 +666,76 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            replayPlayer.LoadSteps(ReplayLogSerializer.FromJsonLines(replayAsset.text));
+            LoadReplaySteps(ReplayLogSerializer.FromJsonLines(replayAsset.text), "Bundled demo replay");
             status = "Cloud: demo replay loaded";
+        }
+
+        private void LoadReplaySteps(IReadOnlyList<ReplayLogStepDto> steps, string source)
+        {
+            replayPlayer.LoadSteps(steps);
+            loadedReplaySummary = FormatReplaySummary(steps, source);
+        }
+
+        private string FormatReplaySummary(IReadOnlyList<ReplayLogStepDto> steps, string source)
+        {
+            if (steps == null || steps.Count == 0)
+            {
+                return $"{source}: no steps";
+            }
+
+            ReplayLogStepDto first = steps[0];
+            ReplayLogStepDto last = steps[steps.Count - 1];
+            string episode = string.IsNullOrWhiteSpace(first.episode_id) ? "episode unknown" : first.episode_id;
+            return $"{source}: job {Shorten(first.job_id, 18)} · scenario {first.scenario_id ?? "unknown"} · " +
+                   $"{episode} · {steps.Count} steps · {last.time_seconds:0.0}s";
+        }
+
+        private static string FormatScenarioSummary(ScenarioBundleDto scenario)
+        {
+            TrainingDto training = scenario?.training;
+            if (training == null)
+            {
+                return string.Empty;
+            }
+
+            return $"{scenario.scenario_id} · {training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed}";
+        }
+
+        private string GetVisibleTrainerSummary()
+        {
+            if (!string.IsNullOrEmpty(activeJobTrainerSummary))
+            {
+                return activeJobTrainerSummary;
+            }
+
+            NavigationTrainingSettings settings = sceneBuilder?.TrainingSettings;
+            return settings == null
+                ? "none"
+                : $"ppo · {FormatSteps(settings.Timesteps)} · seed {settings.Seed}";
+        }
+
+        private static string FormatScenarioTrainerSummary(ScenarioBundleDto scenario)
+        {
+            TrainingDto training = scenario?.training;
+            if (training == null)
+            {
+                return "none";
+            }
+
+            return $"{training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed}";
+        }
+
+        private GUIStyle GetPresetButtonStyle(string presetName)
+        {
+            return string.Equals(sceneBuilder.TrainingSettings.PresetName, presetName, StringComparison.OrdinalIgnoreCase)
+                ? selectedButtonStyle
+                : buttonStyle;
         }
 
         private void EnsureStyles()
         {
             if (buttonStyle != null &&
+                selectedButtonStyle != null &&
                 primaryButtonStyle != null &&
                 labelStyle != null &&
                 statusStyle != null &&
@@ -637,6 +767,18 @@ namespace EnvForge.Navigation.Cloud
             buttonStyle.active.textColor = Color.white;
             buttonStyle.focused.textColor = Color.white;
 
+            selectedButtonStyle = new GUIStyle(buttonStyle);
+            Texture2D selectedButtonBackground = CreateTexture(new Color(0.1f, 0.8f, 0.75f, 1f));
+            Texture2D selectedButtonHoverBackground = CreateTexture(new Color(0.2f, 0.95f, 0.85f, 1f));
+            selectedButtonStyle.normal.background = selectedButtonBackground;
+            selectedButtonStyle.hover.background = selectedButtonHoverBackground;
+            selectedButtonStyle.active.background = selectedButtonHoverBackground;
+            selectedButtonStyle.focused.background = selectedButtonHoverBackground;
+            selectedButtonStyle.normal.textColor = Color.black;
+            selectedButtonStyle.hover.textColor = Color.black;
+            selectedButtonStyle.active.textColor = Color.black;
+            selectedButtonStyle.focused.textColor = Color.black;
+
             primaryButtonStyle = new GUIStyle(buttonStyle)
             {
                 fontSize = PrimaryButtonFontSize,
@@ -653,12 +795,13 @@ namespace EnvForge.Navigation.Cloud
             statusStyle = new GUIStyle(labelStyle)
             {
                 fontSize = StatusFontSize,
-                alignment = TextAnchor.MiddleCenter,
+                alignment = TextAnchor.MiddleLeft,
+                wordWrap = true,
             };
 
             detailStyle = new GUIStyle(labelStyle)
             {
-                fontSize = 22,
+                fontSize = 18,
                 fontStyle = FontStyle.Normal,
                 wordWrap = true,
                 alignment = TextAnchor.MiddleLeft,

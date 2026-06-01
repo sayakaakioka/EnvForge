@@ -10,7 +10,7 @@ namespace EnvForge.Navigation.Replay
     {
         private const float Padding = 12f;
         private const float Width = 500f;
-        private const float Height = 260f;
+        private const float Height = 360f;
         private const float ButtonHeight = 74f;
         private const float ButtonWidth = 88f;
         private const float ButtonGap = 7f;
@@ -328,7 +328,8 @@ namespace EnvForge.Navigation.Replay
 
             string action = FormatNamedValues(step.action?.values);
             string reward = FormatNamedValues(step.reward?.components);
-            return $"step {step.step_index + 1}/{steps.Count}  t={step.time_seconds:0.00}s\n" +
+            return $"job={Shorten(step.job_id, 18)}  scenario={step.scenario_id ?? "-"}\n" +
+                   $"step {step.step_index + 1}/{steps.Count}  t={step.time_seconds:0.00}s\n" +
                    $"reward={step.reward?.total:0.000} [{reward}]\n" +
                    $"action [{action}]  end={step.termination_reason ?? "-"}";
         }
@@ -358,6 +359,16 @@ namespace EnvForge.Navigation.Replay
             }
 
             return string.Join(", ", parts);
+        }
+
+        private static string Shorten(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "-";
+            }
+
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength) + "...";
         }
 
         private void EnsureStyles()
