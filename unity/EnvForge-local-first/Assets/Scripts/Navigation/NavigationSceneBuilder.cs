@@ -32,6 +32,7 @@ namespace EnvForge.Navigation
         [SerializeField] private Material goalVisualMaterial;
         [SerializeField] private EnvForgeApiSettings apiSettings;
         [SerializeField] private string apiBaseUrl = "http://localhost:8000";
+        [SerializeField] private string webSocketUrlTemplate = "";
         [SerializeField] private bool showCloudRunPanel = true;
         [SerializeField] private NavigationTrainingSettings trainingSettings = new();
 
@@ -81,7 +82,7 @@ namespace EnvForge.Navigation
                 agent.GetComponent<Rigidbody>(),
                 liveController,
                 policyObservationProvider);
-            cloudRunPanel.Configure(this, replayPlayer, inferenceController, apiSettings, apiBaseUrl);
+            cloudRunPanel.Configure(this, replayPlayer, inferenceController, apiSettings, apiBaseUrl, webSocketUrlTemplate);
 
             CreateBoundaryWalls(blockedMaterial, liveController);
             CreateInnerWalls(blockedMaterial, liveController);

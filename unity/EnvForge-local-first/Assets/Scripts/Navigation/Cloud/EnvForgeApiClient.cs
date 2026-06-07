@@ -49,19 +49,6 @@ namespace EnvForge.Navigation.Cloud
                 onError);
         }
 
-        public IEnumerator GetResult(
-            string submissionId,
-            Action<ResultDocumentDto> onSuccess,
-            Action<string> onError)
-        {
-            yield return SendJson(
-                $"results/{submissionId}",
-                UnityWebRequest.kHttpVerbGET,
-                null,
-                responseJson => onSuccess?.Invoke(JsonUtilityBridge.FromJson<ResultDocumentDto>(responseJson)),
-                onError);
-        }
-
         private IEnumerator SendJson(
             string path,
             string method,

@@ -481,7 +481,28 @@ MonoBehaviour:
   goalVisualMaterial: {fileID: 2100000, guid: 1cb1a4ecb3ca4df99caa2504e8ab5a06, type: 2}
   apiSettings: {fileID: 0}
   apiBaseUrl: https://embodiedlab-api-886092613885.asia-northeast1.run.app
+  webSocketUrlTemplate: wss://embodiedlab-notification-e4dlxes4aq-an.a.run.app/ws/results/{submission_id}
   showCloudRunPanel: 1
+  trainingSettings:
+    timesteps: 5000
+    maxEpisodeSteps: 1000
+    seed: 10
+    nSteps: 32
+    batchSize: 32
+    gamma: 0.99
+    learningRate: 0.0003
+    entCoef: 0
+    evalEpisodes: 20
+    goalReachedReward: 100
+    goalProgressReward: 0.1
+    collisionPenalty: -50
+    stepPenalty: -0.01
+    wideAnglePenalty: -0.1
+    rearAnglePenalty: -5
+    inactivePenalty: -0.1
+    movementThreshold: 0.001
+    turnActivityThreshold: 0.3
+    presetName: Smoke
 --- !u!4 &2127491172
 Transform:
   m_ObjectHideFlags: 0

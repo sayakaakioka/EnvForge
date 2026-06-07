@@ -30,7 +30,7 @@ namespace EnvForge.Navigation
             observation = new NavigationGoalObservation(
                 agentPosition.x,
                 agentPosition.z,
-                navigationMetrics.AgentRotationYDegrees,
+                NormalizeAngleDegrees(navigationMetrics.AgentRotationYDegrees),
                 goalPosition.x,
                 goalPosition.z,
                 goalRadius,
@@ -47,15 +47,31 @@ namespace EnvForge.Navigation
                 return frontDistanceRangeMeters;
             }
 
-            return Physics.Raycast(
+            RaycastHit[] hits = Physics.RaycastAll(
                 origin,
                 direction,
-                out RaycastHit hit,
                 frontDistanceRangeMeters,
                 frontDistanceLayers,
-                QueryTriggerInteraction.Ignore)
-                ? hit.distance
-                : frontDistanceRangeMeters;
+                QueryTriggerInteraction.Ignore);
+
+            float nearestDistance = frontDistanceRangeMeters;
+            for (int i = 0; i < hits.Length; i++)
+            {
+                RaycastHit hit = hits[i];
+                if (hit.collider == null || hit.collider.transform.IsChildOf(transform))
+                {
+                    continue;
+                }
+
+                nearestDistance = Mathf.Min(nearestDistance, hit.distance);
+            }
+
+            return nearestDistance;
+        }
+
+        private static float NormalizeAngleDegrees(float angleDegrees)
+        {
+            return Mathf.Repeat(angleDegrees + 180f, 360f) - 180f;
         }
     }
 }

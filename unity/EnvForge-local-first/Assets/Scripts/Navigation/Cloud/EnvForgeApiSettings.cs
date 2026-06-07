@@ -6,8 +6,11 @@ namespace EnvForge.Navigation.Cloud
     public sealed class EnvForgeApiSettings : ScriptableObject
     {
         [SerializeField] private string baseUrl = "http://localhost:8000";
+        [SerializeField] private string webSocketUrlTemplate = "";
 
         public string BaseUrl => baseUrl;
+
+        public string WebSocketUrlTemplate => webSocketUrlTemplate;
 
         public string BuildUrl(string path)
         {

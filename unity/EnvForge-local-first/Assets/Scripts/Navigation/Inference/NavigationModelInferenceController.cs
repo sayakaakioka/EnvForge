@@ -14,10 +14,26 @@ namespace EnvForge.Navigation.Inference
     {
         [SerializeField] private int decisionIntervalFrames = 5;
 
+        private const int ImageObservationChannels = 3;
+        private const int ImageObservationHeight = 84;
+        private const int ImageObservationWidth = 112;
+        private const int ImageObservationValueCount = ImageObservationChannels * ImageObservationHeight * ImageObservationWidth;
+        private const int NumericObservationValueCount = 2;
+        private const int FlatNavigationFinalObservationValueCount = ImageObservationValueCount + NumericObservationValueCount;
+        private const float TrainingForwardStepMeters = 0.2f;
+        private const float TrainingTurnDegreesPerStep = 15f;
+        private const float SemanticRayNearMeters = 0.05f;
+        private const float SemanticRayRangeMeters = 5f;
+        private const float SemanticRayFovDegrees = 70f;
+        private const float SemanticRayOriginHeightMeters = 0.15f;
+
         private readonly float[] observationBuffer = new float[NavigationGoalObservation.ValueCount];
         private readonly float[] robotBuffer = new float[NavigationGoalObservation.RobotValueCount];
         private readonly float[] goalBuffer = new float[NavigationGoalObservation.GoalValueCount];
         private readonly float[] frontDistanceBuffer = new float[NavigationGoalObservation.FrontDistanceValueCount];
+        private readonly float[] imageObservationBuffer = new float[ImageObservationValueCount];
+        private readonly float[] numericObservationBuffer = new float[NumericObservationValueCount];
+        private readonly float[] flatNavigationFinalObservationBuffer = new float[FlatNavigationFinalObservationValueCount];
 
         private AgentMotor motor;
         private Rigidbody body;
@@ -30,6 +46,7 @@ namespace EnvForge.Navigation.Inference
         private string modelPath;
         private string statusSummary = "Inference: off";
         private string lastActionSummary = "action none";
+        private string lastObservationSummary = "obs none";
         private string lastErrorDetails = string.Empty;
 
         public bool IsRunning => isRunning;
@@ -37,6 +54,8 @@ namespace EnvForge.Navigation.Inference
         public string StatusSummary => statusSummary;
 
         public string LastActionSummary => lastActionSummary;
+
+        public string LastObservationSummary => lastObservationSummary;
 
         public string LastErrorDetails => lastErrorDetails;
 
@@ -117,11 +136,13 @@ namespace EnvForge.Navigation.Inference
 
             isRunning = true;
             lastActionSummary = "action waiting";
+            lastObservationSummary = "obs waiting";
             lastErrorDetails = string.Empty;
 
             if (motor != null)
             {
                 motor.enabled = true;
+                ApplyTrainingMotionProfile();
                 motor.Stop();
             }
 
@@ -143,6 +164,7 @@ namespace EnvForge.Navigation.Inference
         {
             isRunning = false;
             motor?.Stop();
+            motor?.ResetMotionProfile();
             DisposeSession();
 
             if (liveController != null)
@@ -154,6 +176,7 @@ namespace EnvForge.Navigation.Inference
             {
                 statusSummary = "Inference: off";
                 lastActionSummary = "action none";
+                lastObservationSummary = "obs none";
                 lastErrorDetails = string.Empty;
             }
             else
@@ -176,6 +199,24 @@ namespace EnvForge.Navigation.Inference
             observation.TryWriteRobotTo(robotBuffer);
             observation.TryWriteGoalTo(goalBuffer);
             observation.TryWriteFrontDistanceTo(frontDistanceBuffer);
+            WriteNumericObservation(observation, numericObservationBuffer);
+            lastObservationSummary = observation.FormatSummary();
+
+            bool needsImageObservation =
+                RequiresInputSource(ModelInputSource.ImageObservation) ||
+                RequiresInputSource(ModelInputSource.FlatNavigationFinalObservation);
+            if (needsImageObservation &&
+                !TryCaptureImageObservation(observation, imageObservationBuffer))
+            {
+                motor?.Stop();
+                statusSummary = "Inference: image observation unavailable";
+                return;
+            }
+
+            if (RequiresInputSource(ModelInputSource.FlatNavigationFinalObservation))
+            {
+                WriteFlatNavigationFinalObservation();
+            }
 
             try
             {
@@ -192,7 +233,7 @@ namespace EnvForge.Navigation.Inference
 
                 float rawForward = actionTensor.GetValue(0);
                 float rawTurn = actionTensor.GetValue(1);
-                float forward = Mathf.Clamp(rawForward, -1f, 1f);
+                float forward = Mathf.Clamp01(rawForward);
                 float turn = Mathf.Clamp(rawTurn, -1f, 1f);
                 motor.SetInput(forward, turn);
                 lastActionSummary = FormatActionSummary(rawForward, rawTurn, forward, turn);
@@ -223,6 +264,7 @@ namespace EnvForge.Navigation.Inference
             LogInferenceError(lastErrorDetails);
             isRunning = false;
             motor?.Stop();
+            motor?.ResetMotionProfile();
             DisposeSession();
             if (liveController != null)
             {
@@ -241,6 +283,9 @@ namespace EnvForge.Navigation.Inference
                     ModelInputSource.Goal => goalBuffer,
                     ModelInputSource.FrontDistance => frontDistanceBuffer,
                     ModelInputSource.CompactObservation => observationBuffer,
+                    ModelInputSource.ImageObservation => imageObservationBuffer,
+                    ModelInputSource.NumericObservation => numericObservationBuffer,
+                    ModelInputSource.FlatNavigationFinalObservation => flatNavigationFinalObservationBuffer,
                     _ => observationBuffer,
                 };
 
@@ -291,7 +336,7 @@ namespace EnvForge.Navigation.Inference
             if (bindings.Count == 0)
             {
                 resolvedInputs = Array.Empty<ModelInputBinding>();
-                error = "Expected robot/goal/front_distance inputs or one compact float observation input.";
+                error = "Expected obs_0/obs_1, robot/goal/front_distance, or one compact float observation input.";
                 return false;
             }
 
@@ -328,7 +373,28 @@ namespace EnvForge.Navigation.Inference
                 return true;
             }
 
+            if (normalizedName == "obs_0")
+            {
+                source = ModelInputSource.ImageObservation;
+                valueCount = ImageObservationValueCount;
+                return true;
+            }
+
+            if (normalizedName == "obs_1")
+            {
+                source = ModelInputSource.NumericObservation;
+                valueCount = NumericObservationValueCount;
+                return true;
+            }
+
             int product = ProductWithDynamicBatchAsOne(dimensions);
+            if (normalizedName == "observation" && product == FlatNavigationFinalObservationValueCount)
+            {
+                source = ModelInputSource.FlatNavigationFinalObservation;
+                valueCount = FlatNavigationFinalObservationValueCount;
+                return true;
+            }
+
             if (product == NavigationGoalObservation.ValueCount)
             {
                 source = ModelInputSource.CompactObservation;
@@ -412,6 +478,115 @@ namespace EnvForge.Navigation.Inference
             return product;
         }
 
+        private bool RequiresInputSource(ModelInputSource source)
+        {
+            for (int i = 0; i < inputBindings.Count; i++)
+            {
+                if (inputBindings[i].Source == source)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void ApplyTrainingMotionProfile()
+        {
+            if (motor == null)
+            {
+                return;
+            }
+
+            float decisionSeconds = Mathf.Max(1, decisionIntervalFrames) * Time.fixedDeltaTime;
+            if (decisionSeconds <= 0f)
+            {
+                decisionSeconds = 0.1f;
+            }
+
+            motor.SetMotionProfile(
+                TrainingForwardStepMeters / decisionSeconds,
+                TrainingTurnDegreesPerStep / decisionSeconds);
+        }
+
+        private static void WriteNumericObservation(NavigationGoalObservation observation, float[] values)
+        {
+            float deltaX = observation.GoalX - observation.RobotX;
+            float deltaZ = observation.GoalZ - observation.RobotZ;
+            float distance = Mathf.Sqrt(deltaX * deltaX + deltaZ * deltaZ);
+            float targetDegrees = Mathf.Atan2(deltaX, deltaZ) * Mathf.Rad2Deg;
+            values[0] = Mathf.Repeat(targetDegrees - observation.RobotRotationYDegrees + 180f, 360f) - 180f;
+            values[1] = distance;
+        }
+
+        private bool TryCaptureImageObservation(NavigationGoalObservation observation, float[] values)
+        {
+            if (values == null || values.Length < ImageObservationValueCount)
+            {
+                return false;
+            }
+
+            Array.Clear(values, 0, ImageObservationValueCount);
+            int planeSize = ImageObservationHeight * ImageObservationWidth;
+            Vector3 origin = new(observation.RobotX, transform.position.y + SemanticRayOriginHeightMeters, observation.RobotZ);
+
+            for (int row = 0; row < ImageObservationHeight; row++)
+            {
+                float rowRatio = 1f - row / Mathf.Max(1f, ImageObservationHeight - 1f);
+                float sampleDistance = SemanticRayNearMeters + rowRatio * (SemanticRayRangeMeters - SemanticRayNearMeters);
+                for (int column = 0; column < ImageObservationWidth; column++)
+                {
+                    float columnRatio = column / Mathf.Max(1f, ImageObservationWidth - 1f) - 0.5f;
+                    float rayDegrees = observation.RobotRotationYDegrees + columnRatio * SemanticRayFovDegrees;
+                    Vector3 direction = new(Mathf.Sin(rayDegrees * Mathf.Deg2Rad), 0f, Mathf.Cos(rayDegrees * Mathf.Deg2Rad));
+                    bool blocked = IsSemanticRayBlocked(origin, direction, sampleDistance);
+                    int pixelIndex = row * ImageObservationWidth + column;
+                    values[planeSize + pixelIndex] = blocked ? 0f : 1f;
+                    values[planeSize * 2 + pixelIndex] = blocked ? 1f : 0f;
+                }
+            }
+
+            return true;
+        }
+
+        private void WriteFlatNavigationFinalObservation()
+        {
+            Array.Copy(
+                imageObservationBuffer,
+                0,
+                flatNavigationFinalObservationBuffer,
+                0,
+                ImageObservationValueCount);
+            Array.Copy(
+                numericObservationBuffer,
+                0,
+                flatNavigationFinalObservationBuffer,
+                ImageObservationValueCount,
+                NumericObservationValueCount);
+        }
+
+        private bool IsSemanticRayBlocked(Vector3 origin, Vector3 direction, float distance)
+        {
+            RaycastHit[] hits = Physics.RaycastAll(
+                origin,
+                direction,
+                distance,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < hits.Length; i++)
+            {
+                RaycastHit hit = hits[i];
+                if (hit.rigidbody == body || hit.collider.transform.IsChildOf(transform))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
         private static int ProductWithDynamicBatchAsOne(int[] values)
         {
             if (values == null || values.Length == 0)
@@ -451,6 +626,9 @@ namespace EnvForge.Navigation.Inference
             Robot,
             Goal,
             FrontDistance,
+            ImageObservation,
+            NumericObservation,
+            FlatNavigationFinalObservation,
         }
 
         private readonly struct ModelInputBinding

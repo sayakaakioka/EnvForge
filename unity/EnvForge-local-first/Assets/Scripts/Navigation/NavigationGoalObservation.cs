@@ -39,6 +39,12 @@ namespace EnvForge.Navigation
 
         public float FrontDistance { get; }
 
+        public string FormatSummary()
+        {
+            return $"obs robot ({RobotX:0.00}, {RobotZ:0.00}, rot {RobotRotationYDegrees:0.0}) · " +
+                   $"goal ({GoalX:0.00}, {GoalZ:0.00}, r {GoalRadius:0.00}) · front {FrontDistance:0.00}";
+        }
+
         public bool TryWriteTo(float[] values)
         {
             if (values == null || values.Length < ValueCount)

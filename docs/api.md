@@ -19,6 +19,8 @@ Configure these fields:
 
 - `Base Url`: HTTP API base URL, without a required trailing slash.
 - `WebSocket Url Template`: WebSocket URL containing `{submission_id}`.
+  This is explicit because the API service and notification service may be
+  deployed as separate Cloud Run services.
 - `Model Download Directory Name`: local folder name below
   `Application.persistentDataPath`.
 
@@ -83,7 +85,7 @@ Minimal shape:
     {
       "id": "front_camera",
       "type": "forward_camera",
-      "width": 84,
+      "width": 112,
       "height": 84,
       "semantic_mode": "traversable_vs_blocked"
     },
@@ -99,18 +101,18 @@ Minimal shape:
       {
         "name": "goal_reached",
         "type": "terminal_reward",
-        "weight": 10.0
+        "weight": 100.0
       },
       {
         "name": "goal_progress",
         "type": "distance_delta",
         "target": "goal_001",
-        "weight": 0.5
+        "weight": 0.1
       },
       {
         "name": "collision_penalty",
         "type": "collision",
-        "weight": -5.0
+        "weight": -50.0
       },
       {
         "name": "step_penalty",
@@ -118,24 +120,19 @@ Minimal shape:
         "weight": -0.01
       },
       {
-        "name": "movement_reward",
-        "type": "per_step",
-        "weight": 0.0
-      },
-      {
         "name": "wide_angle_penalty",
         "type": "per_step",
-        "weight": 0.0
+        "weight": -0.1
       },
       {
         "name": "rear_angle_penalty",
         "type": "per_step",
-        "weight": 0.0
+        "weight": -5.0
       },
       {
         "name": "inactive_penalty",
         "type": "per_step",
-        "weight": 0.0
+        "weight": -0.1
       },
       {
         "name": "movement_threshold",
@@ -247,7 +244,7 @@ Example completed response:
       "robot_version": "simple_robot.v0",
       "sensor_version": "basic_sensors.v0",
       "action_layout": ["forward", "turn"],
-      "observation_layout": ["front_camera", "front_distance"]
+      "observation_layout": ["obs_0:image_chw_3x84x112", "obs_1:angle_distance"]
     },
     "summary": {
       "training_timesteps": 5000,
@@ -357,8 +354,9 @@ Expected flow:
 5. On `completed`, Unity downloads the model and Replay Log artifacts when
    available.
 
-If the WebSocket URL is missing or the connection fails, Unity falls back to HTTP
-polling when auto polling is enabled.
+If the WebSocket URL is missing or the connection fails, Unity reports the result
+stream failure and does not provide a manual refresh path. Unity does not infer
+the WebSocket URL from the HTTP API base URL.
 
 ## Artifact Download
 

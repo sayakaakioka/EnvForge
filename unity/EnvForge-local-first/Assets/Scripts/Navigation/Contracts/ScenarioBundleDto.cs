@@ -132,6 +132,9 @@ namespace EnvForge.Navigation.Contracts
         public int timesteps;
         public int seed;
         public int max_episode_steps;
+        public int n_envs;
+        public int cpu_count;
+        public int torch_num_threads;
         public int n_steps;
         public int batch_size;
         public float gamma;

@@ -18,8 +18,8 @@ namespace EnvForge.Navigation.Cloud
         private const float DetailsHeight = 560f;
         private const float ButtonHeight = 54f;
         private const float ButtonGap = 8f;
-        private const float StatusHeight = 126f;
-        private const float StatusLineHeight = 40f;
+        private const float StatusHeight = 156f;
+        private const float StatusLineHeight = 38f;
         private const float StatusLabelWidth = 124f;
         private const int FontSize = 26;
         private const int StatusFontSize = 30;
@@ -42,12 +42,19 @@ namespace EnvForge.Navigation.Cloud
         private EnvForgeApiClient apiClient;
         private EnvForgeArtifactDownloader artifactDownloader;
         private EnvForgeJobHistoryStore jobHistoryStore;
+        private EnvForgeResultWebSocketClient resultWebSocketClient;
         private ResultDocumentDto latestResult;
         private string submissionId;
+        private string webSocketUrlTemplate;
         private string activeScenarioId;
         private string activeJobSettingsSummary;
         private string activeJobTrainerSummary;
         private string loadedReplaySummary;
+        private string resultStreamState = "not connected";
+        private int resultStreamEventCount;
+        private string lastResultStreamStatus;
+        private string lastResultStreamReceivedAt;
+        private bool resultStreamErrorReported;
         private string status = "Cloud: idle";
         private bool busy;
         private bool showTrainingSettings;
@@ -68,6 +75,9 @@ namespace EnvForge.Navigation.Cloud
         private string timestepsText;
         private string maxEpisodeStepsText;
         private string seedText;
+        private string nEnvsText;
+        private string cpuCountText;
+        private string torchNumThreadsText;
         private string nStepsText;
         private string batchSizeText;
         private string gammaText;
@@ -78,19 +88,18 @@ namespace EnvForge.Navigation.Cloud
         private string goalProgressRewardText;
         private string collisionPenaltyText;
         private string stepPenaltyText;
-        private string movementRewardText;
         private string wideAnglePenaltyText;
         private string rearAnglePenaltyText;
         private string inactivePenaltyText;
         private string movementThresholdText;
-        private string turnActivityThresholdText;
 
         public void Configure(
             NavigationSceneBuilder builder,
             NavigationReplayPlayer player,
             NavigationModelInferenceController inference,
             EnvForgeApiSettings settings,
-            string baseUrl)
+            string baseUrl,
+            string resultStreamUrlTemplate)
         {
             sceneBuilder = builder;
             replayPlayer = player;
@@ -99,10 +108,24 @@ namespace EnvForge.Navigation.Cloud
             apiClient = settings != null
                 ? new EnvForgeApiClient(settings)
                 : new EnvForgeApiClient(fallbackBaseUrl);
+            webSocketUrlTemplate = settings != null && !string.IsNullOrWhiteSpace(settings.WebSocketUrlTemplate)
+                ? settings.WebSocketUrlTemplate
+                : resultStreamUrlTemplate;
             artifactDownloader = new EnvForgeArtifactDownloader();
             jobHistoryStore = new EnvForgeJobHistoryStore(Application.persistentDataPath);
+            resultWebSocketClient = new EnvForgeResultWebSocketClient();
             RestoreLatestJob();
             SyncTextFromTrainingSettings();
+        }
+
+        private void Update()
+        {
+            ProcessResultStreamMessages();
+        }
+
+        private void OnDestroy()
+        {
+            resultWebSocketClient?.Dispose();
         }
 
         private void RestoreLatestJob()
@@ -186,20 +209,14 @@ namespace EnvForge.Navigation.Cloud
             }
 
             y += ButtonHeight + ButtonGap;
-            float fourButtonWidth = (contentRect.width - ButtonGap * 3f) * 0.25f;
-            Rect submitRect = new(contentRect.x, y, fourButtonWidth, ButtonHeight);
-            Rect pollRect = new(submitRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
-            Rect detailsRect = new(pollRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
-            Rect downloadRect = new(detailsRect.xMax + ButtonGap, y, fourButtonWidth, ButtonHeight);
+            float secondaryButtonWidth = (contentRect.width - ButtonGap * 2f) / 3f;
+            Rect submitRect = new(contentRect.x, y, secondaryButtonWidth, ButtonHeight);
+            Rect detailsRect = new(submitRect.xMax + ButtonGap, y, secondaryButtonWidth, ButtonHeight);
+            Rect downloadRect = new(detailsRect.xMax + ButtonGap, y, secondaryButtonWidth, ButtonHeight);
 
             if (DrawButton(submitRect, new GUIContent("SUBMIT", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
             {
                 StartCoroutine(SubmitAndTrain());
-            }
-
-            if (DrawButton(pollRect, new GUIContent("POLL", "Poll result"), buttonStyle, !busy && apiClient != null && !string.IsNullOrEmpty(submissionId)))
-            {
-                StartCoroutine(PollResult());
             }
 
             GUIStyle detailsButtonStyle = showJobDetails ? selectedButtonStyle : buttonStyle;
@@ -230,6 +247,12 @@ namespace EnvForge.Navigation.Cloud
         {
             busy = true;
             latestResult = null;
+            resultWebSocketClient?.Stop();
+            resultStreamState = "not connected";
+            resultStreamEventCount = 0;
+            lastResultStreamStatus = null;
+            lastResultStreamReceivedAt = null;
+            resultStreamErrorReported = false;
             status = "Cloud: submitting scenario";
 
             ScenarioBundleDto scenario = sceneBuilder.BuildScenarioBundle();
@@ -270,40 +293,88 @@ namespace EnvForge.Navigation.Cloud
             busy = false;
             if (!failed)
             {
-                StartCoroutine(PollUntilTerminal());
+                StartResultStream();
             }
         }
 
-        private IEnumerator PollUntilTerminal()
+        private void StartResultStream()
         {
-            while (!string.IsNullOrEmpty(submissionId))
+            string url = BuildResultWebSocketUrl(submissionId);
+            if (string.IsNullOrWhiteSpace(url))
             {
-                yield return PollResult();
-                string resultStatus = latestResult?.status;
-                if (string.Equals(resultStatus, "completed", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(resultStatus, "failed", StringComparison.OrdinalIgnoreCase))
+                resultStreamState = "missing URL";
+                status = "Cloud: result stream URL missing";
+                Debug.LogWarning("Result stream URL is not configured. Set WebSocket Url Template on ApiSettings or NavigationSceneBuilder.");
+                showTrainingSettings = false;
+                showJobDetails = true;
+                return;
+            }
+
+            resultStreamState = "connecting";
+            resultWebSocketClient.Start(url);
+            status = "Cloud: listening for result";
+        }
+
+        private void ProcessResultStreamMessages()
+        {
+            if (resultWebSocketClient == null)
+            {
+                return;
+            }
+
+            while (resultWebSocketClient.TryDequeue(out string message))
+            {
+                if (message.Contains("\"type\"", StringComparison.OrdinalIgnoreCase) &&
+                    message.Contains("\"connected\"", StringComparison.OrdinalIgnoreCase))
                 {
-                    yield break;
+                    resultStreamState = "connected";
+                    status = "Cloud: result stream connected";
+                    continue;
                 }
 
-                yield return new WaitForSeconds(5f);
+                ResultDocumentDto result = JsonUtilityBridge.FromJson<ResultDocumentDto>(message);
+                if (string.IsNullOrWhiteSpace(result?.submission_id) ||
+                    string.IsNullOrWhiteSpace(result.status))
+                {
+                    Debug.LogWarning($"Ignored result stream message: {message}");
+                    continue;
+                }
+
+                ApplyResultUpdate(result);
+            }
+
+            string streamError = resultWebSocketClient.LastError;
+            if (!resultStreamErrorReported && !string.IsNullOrWhiteSpace(streamError))
+            {
+                resultStreamErrorReported = true;
+                resultStreamState = "failed";
+                status = $"Result stream failed: {streamError}";
+                Debug.LogWarning($"Result stream failed: {streamError}");
             }
         }
 
-        private IEnumerator PollResult()
+        private void ApplyResultUpdate(ResultDocumentDto result)
         {
-            busy = true;
-            status = "Cloud: polling result";
-            yield return apiClient.GetResult(
-                submissionId,
-                result =>
-                {
-                    latestResult = result;
-                    jobHistoryStore.UpsertResult(submissionId, result);
-                    status = $"Cloud: {result.status}";
-                },
-                error => status = $"Cloud poll failed: {error}");
-            busy = false;
+            latestResult = result;
+            resultStreamEventCount += 1;
+            lastResultStreamStatus = result.status;
+            lastResultStreamReceivedAt = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            string resultSubmissionId = string.IsNullOrWhiteSpace(result.submission_id)
+                ? submissionId
+                : result.submission_id;
+            jobHistoryStore.UpsertResult(resultSubmissionId, result);
+            status = $"Cloud: {result.status}";
+
+            if (string.Equals(result.status, "completed", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(result.status, "failed", StringComparison.OrdinalIgnoreCase))
+            {
+                resultStreamState = "closed";
+                resultWebSocketClient?.Stop();
+            }
+            else
+            {
+                resultStreamState = "receiving";
+            }
         }
 
         private IEnumerator DownloadReplay()
@@ -401,6 +472,11 @@ namespace EnvForge.Navigation.Cloud
             Rect trainerValueRect = new(trainerLabelRect.xMax, trainerLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
             GUI.Label(trainerLabelRect, "TRAIN", labelStyle);
             GUI.Label(trainerValueRect, lines[2], detailStyle);
+
+            Rect streamLabelRect = new(rect.x, rect.y + StatusLineHeight * 3f, StatusLabelWidth, StatusLineHeight);
+            Rect streamValueRect = new(streamLabelRect.xMax, streamLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
+            GUI.Label(streamLabelRect, "STREAM", labelStyle);
+            GUI.Label(streamValueRect, lines[3], detailStyle);
         }
 
         private string[] FormatHudStatusLines()
@@ -420,10 +496,13 @@ namespace EnvForge.Navigation.Cloud
             {
                 hudStatus = "RUNNING";
             }
-            else if (string.Equals(resultStatus, "queued", StringComparison.OrdinalIgnoreCase) ||
-                status.Contains("queued", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(resultStatus, "queued", StringComparison.OrdinalIgnoreCase))
             {
                 hudStatus = "QUEUED";
+            }
+            else if (!string.IsNullOrEmpty(submissionId) && resultStreamEventCount == 0)
+            {
+                hudStatus = "NO EVENT";
             }
             else if (busy)
             {
@@ -442,6 +521,7 @@ namespace EnvForge.Navigation.Cloud
                 hudStatus,
                 scenario,
                 GetVisibleTrainerSummary(),
+                FormatResultStreamSummary(),
             };
         }
 
@@ -508,6 +588,7 @@ namespace EnvForge.Navigation.Cloud
 
             GUILayout.Label("Result", statusStyle);
             GUILayout.Label($"Status: {latestResult?.status ?? "none"}", detailStyle);
+            GUILayout.Label(FormatResultStreamSummary(), detailStyle);
 
             GUILayout.Space(8f);
             GUILayout.Label("Submitted Job", labelStyle);
@@ -522,6 +603,11 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Label($"Artifacts: replay {FormatArtifactState(GetResultArtifacts()?.replay_log)} · model {FormatModelArtifactState(GetResultArtifacts())}", detailStyle);
             GUILayout.Label(FormatHistorySummary(), detailStyle);
             GUILayout.Label(FormatInferenceSummary(), detailStyle);
+            if (!string.IsNullOrWhiteSpace(inferenceController?.LastObservationSummary))
+            {
+                GUILayout.Label(inferenceController.LastObservationSummary, detailStyle);
+            }
+
             if (!string.IsNullOrWhiteSpace(inferenceController?.LastErrorDetails))
             {
                 GUILayout.Label($"Inference error: {inferenceController.LastErrorDetails}", detailStyle);
@@ -650,6 +736,22 @@ namespace EnvForge.Navigation.Cloud
             return $"Progress: {phase ?? "unknown"} · {steps}";
         }
 
+        private string FormatResultStreamSummary()
+        {
+            string summary = $"Stream: {resultStreamState} · events {resultStreamEventCount}";
+            if (!string.IsNullOrWhiteSpace(lastResultStreamStatus))
+            {
+                summary += $" · last {lastResultStreamStatus}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(lastResultStreamReceivedAt))
+            {
+                summary += $" @ {lastResultStreamReceivedAt}";
+            }
+
+            return summary;
+        }
+
         private static string Shorten(string value, int maxLength)
         {
             if (string.IsNullOrEmpty(value))
@@ -658,6 +760,19 @@ namespace EnvForge.Navigation.Cloud
             }
 
             return value.Length <= maxLength ? value : value.Substring(0, maxLength) + "...";
+        }
+
+        private string BuildResultWebSocketUrl(string resultSubmissionId)
+        {
+            if (string.IsNullOrWhiteSpace(resultSubmissionId) ||
+                string.IsNullOrWhiteSpace(webSocketUrlTemplate))
+            {
+                return string.Empty;
+            }
+
+            return webSocketUrlTemplate.Replace(
+                "{submission_id}",
+                Uri.EscapeDataString(resultSubmissionId));
         }
 
         private void DrawTrainingSettings(Rect panelRect)
@@ -716,6 +831,9 @@ namespace EnvForge.Navigation.Cloud
             DrawIntField("timesteps", ref timestepsText, value => sceneBuilder.TrainingSettings.Timesteps = value);
             DrawIntField("max episode", ref maxEpisodeStepsText, value => sceneBuilder.TrainingSettings.MaxEpisodeSteps = value);
             DrawIntField("seed", ref seedText, value => sceneBuilder.TrainingSettings.Seed = value);
+            DrawIntField("n envs", ref nEnvsText, value => sceneBuilder.TrainingSettings.NEnvs = value);
+            DrawIntField("cpu", ref cpuCountText, value => sceneBuilder.TrainingSettings.CpuCount = value);
+            DrawIntField("torch th.", ref torchNumThreadsText, value => sceneBuilder.TrainingSettings.TorchNumThreads = value);
             DrawIntField("n steps", ref nStepsText, value => sceneBuilder.TrainingSettings.NSteps = value);
             DrawIntField("batch", ref batchSizeText, value => sceneBuilder.TrainingSettings.BatchSize = value);
             DrawFloatField("gamma", ref gammaText, value => sceneBuilder.TrainingSettings.Gamma = value);
@@ -731,12 +849,10 @@ namespace EnvForge.Navigation.Cloud
             DrawFloatField("progress", ref goalProgressRewardText, value => sceneBuilder.TrainingSettings.GoalProgressReward = value);
             DrawFloatField("collision", ref collisionPenaltyText, value => sceneBuilder.TrainingSettings.CollisionPenalty = value);
             DrawFloatField("step", ref stepPenaltyText, value => sceneBuilder.TrainingSettings.StepPenalty = value);
-            DrawFloatField("movement", ref movementRewardText, value => sceneBuilder.TrainingSettings.MovementReward = value);
             DrawFloatField("wide angle", ref wideAnglePenaltyText, value => sceneBuilder.TrainingSettings.WideAnglePenalty = value);
             DrawFloatField("rear angle", ref rearAnglePenaltyText, value => sceneBuilder.TrainingSettings.RearAnglePenalty = value);
             DrawFloatField("inactive", ref inactivePenaltyText, value => sceneBuilder.TrainingSettings.InactivePenalty = value);
             DrawFloatField("move th.", ref movementThresholdText, value => sceneBuilder.TrainingSettings.MovementThreshold = value);
-            DrawFloatField("turn th.", ref turnActivityThresholdText, value => sceneBuilder.TrainingSettings.TurnActivityThreshold = value);
         }
 
         private void DrawIntField(string label, ref string text, Action<int> applyValue)
@@ -776,6 +892,9 @@ namespace EnvForge.Navigation.Cloud
             timestepsText = settings.Timesteps.ToString(CultureInfo.InvariantCulture);
             maxEpisodeStepsText = settings.MaxEpisodeSteps.ToString(CultureInfo.InvariantCulture);
             seedText = settings.Seed.ToString(CultureInfo.InvariantCulture);
+            nEnvsText = settings.NEnvs.ToString(CultureInfo.InvariantCulture);
+            cpuCountText = settings.CpuCount.ToString(CultureInfo.InvariantCulture);
+            torchNumThreadsText = settings.TorchNumThreads.ToString(CultureInfo.InvariantCulture);
             nStepsText = settings.NSteps.ToString(CultureInfo.InvariantCulture);
             batchSizeText = settings.BatchSize.ToString(CultureInfo.InvariantCulture);
             gammaText = settings.Gamma.ToString("0.####", CultureInfo.InvariantCulture);
@@ -786,12 +905,10 @@ namespace EnvForge.Navigation.Cloud
             goalProgressRewardText = settings.GoalProgressReward.ToString("0.######", CultureInfo.InvariantCulture);
             collisionPenaltyText = settings.CollisionPenalty.ToString("0.######", CultureInfo.InvariantCulture);
             stepPenaltyText = settings.StepPenalty.ToString("0.######", CultureInfo.InvariantCulture);
-            movementRewardText = settings.MovementReward.ToString("0.######", CultureInfo.InvariantCulture);
             wideAnglePenaltyText = settings.WideAnglePenalty.ToString("0.######", CultureInfo.InvariantCulture);
             rearAnglePenaltyText = settings.RearAnglePenalty.ToString("0.######", CultureInfo.InvariantCulture);
             inactivePenaltyText = settings.InactivePenalty.ToString("0.######", CultureInfo.InvariantCulture);
             movementThresholdText = settings.MovementThreshold.ToString("0.######", CultureInfo.InvariantCulture);
-            turnActivityThresholdText = settings.TurnActivityThreshold.ToString("0.######", CultureInfo.InvariantCulture);
         }
 
         private void LoadBundledReplay()
@@ -871,7 +988,7 @@ namespace EnvForge.Navigation.Cloud
                 return string.Empty;
             }
 
-            return $"{scenario.scenario_id} · {training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed}";
+            return $"{scenario.scenario_id} · {training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed} · envs {training.n_envs}";
         }
 
         private string GetVisibleTrainerSummary()
@@ -884,7 +1001,7 @@ namespace EnvForge.Navigation.Cloud
             NavigationTrainingSettings settings = sceneBuilder?.TrainingSettings;
             return settings == null
                 ? "none"
-                : $"ppo · {FormatSteps(settings.Timesteps)} · seed {settings.Seed}";
+                : $"ppo · {FormatSteps(settings.Timesteps)} · seed {settings.Seed} · envs {settings.NEnvs} · cpu {settings.CpuCount} · th {settings.TorchNumThreads}";
         }
 
         private static string FormatScenarioTrainerSummary(ScenarioBundleDto scenario)
@@ -895,7 +1012,10 @@ namespace EnvForge.Navigation.Cloud
                 return "none";
             }
 
-            return $"{training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed}";
+            string cpuSummary = training.cpu_count > 0
+                ? training.cpu_count.ToString(CultureInfo.InvariantCulture)
+                : "job";
+            return $"{training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed} · envs {training.n_envs} · cpu {cpuSummary} · th {training.torch_num_threads}";
         }
 
         private GUIStyle GetPresetButtonStyle(string presetName)
