@@ -159,6 +159,12 @@ Phase 5 の完了後、または Phase 5 を仕上げながら進める実装 TO
 - 右上のクラウド操作パネルと左下の Replay パネルのフォントサイズを再設計する。
   少なくとも左上の既存情報パネルより小さくならないようにし、画面全体の情報階層を
   揃える。
+- 右上のクラウド操作パネルは、通常時は環境観察を邪魔しにくい compact HUD とし、
+  `Settings` / `Job` を開いた時だけ詳細操作パネルを表示する方針へ寄せた。
+  詳細表示は `Esc` で畳めるようにし、クラウド UI 全体は `F10` で表示切り替えできる。
+- 左下の Replay overlay も同じ方針で、通常時は再生操作だけを残した compact bar とし、
+  reward component や action などの詳細は `Details` を開いた時だけ表示する。
+  Replay 詳細は `Esc` で畳めるようにし、Replay UI 全体は `F9` で表示切り替えできる。
 - job history の表示 UI を再設計する。現状は `Job details` に保存件数と latest job
   の artifact readiness を最小表示するだけなので、後続で job 一覧、選択、再取得、
   local artifact の開き直しを扱える形にする。
@@ -172,6 +178,19 @@ Phase 5 の完了後、または Phase 5 を仕上げながら進める実装 TO
   `omega` が -0.3..0.3 の場合 -0.1 とする。
 - 壁パーツをユーザーが自由に立てられるようにし、その配置を Scenario Bundle に
   反映する。
+- 初期地形は緑の平面と青い境界壁だけにし、固定の内壁は主経路から外す。
+  平面サイズは World panel で変更でき、境界壁は平面サイズに追従する。
+  ユーザーが追加した青い壁は `static_walls` として Scenario Bundle に反映する。
+  ロボットの表示色は床、壁、ゴールと判別しやすいマゼンタ系に変更する。
+- 無人の実モデル確認用に、Unity Player 起動引数から複数エピソード推論評価を
+  実行できる入口を追加する。`-envforgeEvaluateModel` で ONNX を指定し、
+  `-envforgeEvaluationOutput` に JSON 結果を書き出す。評価中は通常の
+  live controller ではなく評価 runner が Goal / collision event を受け取り、
+  成功率、衝突数、timeout 数、平均 step を記録する。
+- EnvForge 生成の Scenario Bundle を使って無人で EmbodiedLab に投入するため、
+  Unity Player 起動引数 `-envforgeSubmitJob` を追加する。`-envforgeTrainingPreset mvp`
+  と `-envforgeWorldVariant default/random-small/random-medium/random-large` を使い、
+  本番テスト設定とランダム環境の投入を人間操作なしで再現できるようにする。
 - コードを現行の主経路に合わせてきれいにシンプルにする。過去の MVP や旧実験の
   遺産は、必要なら履歴として参照し、現行 runtime の複雑さとして残さない。
 - テストも同じ方針で整理し、Scenario Bundle、Result Bundle、Replay、artifact 回収、

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Cloud;
@@ -21,10 +22,9 @@ namespace EnvForge.Navigation
         [SerializeField] private float wallHeight = 1.8f;
         [SerializeField] private float wallThickness = 0.35f;
         [SerializeField] private float goalReachRadius = 1.2f;
-        [SerializeField] private bool saveSegmentationFrames;
-        [SerializeField] private int saveSegmentationEverySteps = 100;
         [SerializeField] private bool showSegmentationPreview = true;
         [SerializeField] private Rect segmentationPreviewRect = new(0.74f, 0.02f, 0.24f, 0.18f);
+        [SerializeField] private float agentCollisionRadius = 0.01f;
         [SerializeField] private Material passableSegmentationMaterial;
         [SerializeField] private Material blockedSegmentationMaterial;
         [SerializeField] private Material agentVisualMaterial;
@@ -36,7 +36,27 @@ namespace EnvForge.Navigation
         [SerializeField] private bool showCloudRunPanel = true;
         [SerializeField] private NavigationTrainingSettings trainingSettings = new();
 
+        private readonly List<NavigationScenarioWallSpec> userWalls = new();
+        private readonly List<GameObject> boundaryWallObjects = new();
+        private readonly List<GameObject> wallObjects = new();
+        private GameObject floorObject;
+        private Material blockedRuntimeMaterial;
+        private INavigationEpisodeEvents episodeEvents;
+        private NavigationEpisodeEventHub episodeEventHub;
+        private NavigationGoalObservationProvider policyObservationProvider;
+        private int nextWallId = 1;
+
         public NavigationTrainingSettings TrainingSettings => trainingSettings;
+
+        public Vector2 FloorSize => floorSize;
+
+        public float WallHeight => wallHeight;
+
+        public float WallThickness => wallThickness;
+
+        public float GoalReachRadius => goalReachRadius;
+
+        public int UserWallCount => userWalls.Count;
 
         public ScenarioBundleDto BuildScenarioBundle(string scenarioId = DefaultScenarioId)
         {
@@ -52,9 +72,10 @@ namespace EnvForge.Navigation
         {
             Material passableMaterial = ResolveMaterial(passableSegmentationMaterial, "Navigation Passable Segmentation Material", Color.green);
             Material blockedMaterial = ResolveMaterial(blockedSegmentationMaterial, "Navigation Blocked Segmentation Material", Color.blue);
-            Material agentMaterial = ResolveMaterial(agentVisualMaterial, "Navigation Agent Material", new Color(0.16f, 0.38f, 0.78f));
+            Material agentMaterial = ResolveMaterial(agentVisualMaterial, "Navigation Agent Material", new Color(1f, 0.16f, 0.86f));
             Material arrowMaterial = ResolveMaterial(directionArrowMaterial, "Navigation Direction Arrow Material", Color.white);
             Material goalMaterial = ResolveMaterial(goalVisualMaterial, "Navigation Goal Material", new Color(1f, 0.82f, 0.12f));
+            blockedRuntimeMaterial = blockedMaterial;
 
             CreateFloor(passableMaterial);
 
@@ -68,13 +89,11 @@ namespace EnvForge.Navigation
             NavigationMetrics metrics = gameObject.AddComponent<NavigationMetrics>();
             metrics.Configure(agent.transform, goal.transform);
 
-            NavigationObservationProvider debugObservationProvider = gameObject.AddComponent<NavigationObservationProvider>();
-            debugObservationProvider.Configure(metrics, floorSize.magnitude);
-            NavigationDebugOverlay debugOverlay = gameObject.AddComponent<NavigationDebugOverlay>();
-            debugOverlay.Configure(metrics, debugObservationProvider);
-
             NavigationLiveController liveController = agent.GetComponent<NavigationLiveController>();
-            NavigationGoalObservationProvider policyObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
+            episodeEventHub = gameObject.AddComponent<NavigationEpisodeEventHub>();
+            episodeEventHub.Configure(liveController);
+            episodeEvents = episodeEventHub;
+            policyObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
             policyObservationProvider.Configure(metrics, floorSize.magnitude, goalReachRadius);
             NavigationModelInferenceController inferenceController = agent.GetComponent<NavigationModelInferenceController>();
             inferenceController.Configure(
@@ -84,39 +103,24 @@ namespace EnvForge.Navigation
                 policyObservationProvider);
             cloudRunPanel.Configure(this, replayPlayer, inferenceController, apiSettings, apiBaseUrl, webSocketUrlTemplate);
 
-            CreateBoundaryWalls(blockedMaterial, liveController);
-            CreateInnerWalls(blockedMaterial, liveController);
+            RebuildBoundaryWalls();
+            NavigationWorldEditorPanel worldEditorPanel = gameObject.AddComponent<NavigationWorldEditorPanel>();
+            worldEditorPanel.Configure(this);
 
             GoalReachChecker goalReachChecker = gameObject.AddComponent<GoalReachChecker>();
-            goalReachChecker.Configure(liveController, metrics, goalReachRadius);
+            goalReachChecker.Configure(episodeEvents, metrics, goalReachRadius);
 
             PositionCamera();
         }
 
         private void CreateFloor(Material material)
         {
-            GameObject floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            floor.name = "Navigation Floor";
-            floor.transform.SetParent(transform);
-            floor.transform.position = Vector3.zero;
-            floor.transform.localScale = new Vector3(floorSize.x, 0.1f, floorSize.y);
-            floor.GetComponent<Renderer>().sharedMaterial = material;
-        }
-
-        private void CreateBoundaryWalls(Material material, INavigationEpisodeEvents episodeEvents)
-        {
-            foreach (NavigationScenarioWallSpec wallSpec in NavigationScenarioLayout.CreateBoundaryWalls(floorSize, wallHeight, wallThickness))
-            {
-                CreateWall(wallSpec, material, episodeEvents);
-            }
-        }
-
-        private void CreateInnerWalls(Material material, INavigationEpisodeEvents episodeEvents)
-        {
-            foreach (NavigationScenarioWallSpec wallSpec in NavigationScenarioLayout.CreateInnerWalls(wallHeight))
-            {
-                CreateWall(wallSpec, material, episodeEvents);
-            }
+            floorObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            floorObject.name = "Navigation Floor";
+            floorObject.transform.SetParent(transform);
+            floorObject.transform.position = Vector3.zero;
+            floorObject.transform.localScale = new Vector3(floorSize.x, 0.1f, floorSize.y);
+            floorObject.GetComponent<Renderer>().sharedMaterial = material;
         }
 
         private GameObject CreateAgent(Material material, Material arrowMaterial)
@@ -125,14 +129,16 @@ namespace EnvForge.Navigation
             agent.name = "Navigation Agent";
             agent.transform.SetParent(transform);
             agent.transform.SetPositionAndRotation(AgentStartPosition, AgentStartRotation);
+            agent.layer = HiddenFromSegmentationCameraLayer;
             agent.GetComponent<Renderer>().sharedMaterial = material;
+            CapsuleCollider capsule = agent.GetComponent<CapsuleCollider>();
+            capsule.radius = agentCollisionRadius;
 
             Rigidbody body = agent.AddComponent<Rigidbody>();
             body.mass = 1f;
 
             agent.AddComponent<AgentMotor>();
             Camera segmentationCamera = CreateSegmentationCamera(agent.transform);
-            ConfigureSegmentationCapture(segmentationCamera.gameObject);
             ConfigureSegmentationPreview(segmentationCamera.gameObject, segmentationCamera);
             agent.AddComponent<NavigationLiveController>();
             agent.AddComponent<NavigationModelInferenceController>();
@@ -148,6 +154,7 @@ namespace EnvForge.Navigation
             arrow.transform.localPosition = new Vector3(0f, 1.35f, 0f);
             arrow.transform.localRotation = Quaternion.identity;
             arrow.transform.localScale = Vector3.one;
+            arrow.layer = HiddenFromSegmentationCameraLayer;
 
             Mesh mesh = new()
             {
@@ -202,38 +209,45 @@ namespace EnvForge.Navigation
             return goal;
         }
 
-        private void CreateWall(string wallName, Vector3 position, Vector3 scale, Material material, INavigationEpisodeEvents episodeEvents)
+        private void CreateWall(NavigationScenarioWallSpec wallSpec, Material material, INavigationEpisodeEvents episodeEvents, bool trackUserWall = false, bool trackBoundaryWall = false)
         {
             GameObject wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            wall.name = wallName;
+            wall.name = wallSpec.DisplayName;
             wall.transform.SetParent(transform);
-            wall.transform.position = position;
-            wall.transform.localScale = scale;
+            wall.transform.SetPositionAndRotation(wallSpec.Center, Quaternion.Euler(0f, -wallSpec.RotationYDegrees, 0f));
+            wall.transform.localScale = wallSpec.Size;
             wall.GetComponent<Renderer>().sharedMaterial = material;
 
             WallCollisionReporter reporter = wall.AddComponent<WallCollisionReporter>();
-            reporter.Configure(episodeEvents);
-        }
+            reporter.Configure(episodeEvents, wallSpec.Id);
+            if (trackUserWall)
+            {
+                wallObjects.Add(wall);
+            }
 
-        private void CreateWall(NavigationScenarioWallSpec wallSpec, Material material, INavigationEpisodeEvents episodeEvents)
-        {
-            CreateWall(wallSpec.DisplayName, wallSpec.Center, wallSpec.Size, material, episodeEvents);
+            if (trackBoundaryWall)
+            {
+                boundaryWallObjects.Add(wall);
+            }
         }
 
         private Camera CreateSegmentationCamera(Transform agent)
         {
             GameObject cameraObject = new("Navigation Segmentation Camera");
             cameraObject.transform.SetParent(agent);
-            cameraObject.transform.localPosition = new Vector3(0f, 0.9f, 0.65f);
-            cameraObject.transform.localRotation = Quaternion.Euler(15f, 0f, 0f);
+            cameraObject.transform.localPosition = new Vector3(
+                0f,
+                trainingSettings.CameraMountHeightMeters - agent.position.y,
+                0f);
+            cameraObject.transform.localRotation = Quaternion.Euler(NavigationScenarioBundleDefaults.CameraPitchDegrees, 0f, 0f);
 
             Camera camera = cameraObject.AddComponent<Camera>();
             camera.enabled = false;
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = Color.blue;
-            camera.fieldOfView = 70f;
-            camera.nearClipPlane = 0.05f;
-            camera.farClipPlane = 25f;
+            camera.fieldOfView = NavigationScenarioBundleDefaults.CameraVerticalFovDegrees;
+            camera.nearClipPlane = NavigationScenarioBundleDefaults.CameraNearClipMeters;
+            camera.farClipPlane = NavigationScenarioBundleDefaults.CameraFarClipMeters;
             camera.cullingMask = ~(1 << HiddenFromSegmentationCameraLayer);
 
             return camera;
@@ -243,12 +257,6 @@ namespace EnvForge.Navigation
         {
             SegmentationPreviewOverlay preview = cameraObject.AddComponent<SegmentationPreviewOverlay>();
             preview.Configure(showSegmentationPreview, segmentationCamera, segmentationPreviewRect, SegmentationImageWidth, SegmentationImageHeight);
-        }
-
-        private void ConfigureSegmentationCapture(GameObject cameraObject)
-        {
-            SegmentationFrameCapture capture = cameraObject.AddComponent<SegmentationFrameCapture>();
-            capture.Configure(saveSegmentationFrames, saveSegmentationEverySteps, SegmentationImageWidth, SegmentationImageHeight);
         }
 
         private static Material ResolveMaterial(Material assignedMaterial, string fallbackMaterialName, Color fallbackColor)
@@ -306,6 +314,110 @@ namespace EnvForge.Navigation
                 Mathf.Max(0.5f, floorSize.y * 0.5f - wallThickness - 1f));
         }
 
+        public void SetFloorSize(Vector2 size)
+        {
+            Vector2 minimumFloorSize = GetMinimumFloorSize();
+            floorSize = new Vector2(
+                Mathf.Clamp(size.x, minimumFloorSize.x, 80f),
+                Mathf.Clamp(size.y, minimumFloorSize.y, 80f));
+            if (floorObject != null)
+            {
+                floorObject.transform.localScale = new Vector3(floorSize.x, 0.1f, floorSize.y);
+            }
+
+            RebuildBoundaryWalls();
+            float observationScale = floorSize.magnitude;
+            policyObservationProvider?.Configure(policyObservationProvider.GetComponent<NavigationMetrics>(), observationScale, goalReachRadius);
+        }
+
+        private Vector2 GetMinimumFloorSize()
+        {
+            float safeGoalClearance = wallThickness + goalReachRadius + 0.25f;
+            float halfWidth = Mathf.Max(Mathf.Abs(AgentStartPosition.x), Mathf.Abs(GoalStartPosition.x)) + safeGoalClearance;
+            float halfDepth = Mathf.Max(Mathf.Abs(AgentStartPosition.z), Mathf.Abs(GoalStartPosition.z)) + safeGoalClearance;
+            return new Vector2(halfWidth * 2f, halfDepth * 2f);
+        }
+
+        private void RebuildBoundaryWalls()
+        {
+            foreach (GameObject boundaryWallObject in boundaryWallObjects)
+            {
+                if (boundaryWallObject != null)
+                {
+                    Destroy(boundaryWallObject);
+                }
+            }
+
+            boundaryWallObjects.Clear();
+            if (blockedRuntimeMaterial == null || episodeEvents == null)
+            {
+                return;
+            }
+
+            foreach (NavigationScenarioWallSpec wallSpec in NavigationScenarioLayout.CreateBoundaryWalls(floorSize, wallHeight, wallThickness))
+            {
+                CreateWall(wallSpec, blockedRuntimeMaterial, episodeEvents, trackBoundaryWall: true);
+            }
+        }
+
+        public void AddUserWall(Vector2 center, float length, float thickness, float rotationYDegrees)
+        {
+            float safeLength = Mathf.Clamp(length, 0.25f, Mathf.Max(floorSize.x, floorSize.y));
+            float safeThickness = Mathf.Clamp(thickness, 0.1f, 2f);
+            Vector2 clampedCenter = new(
+                Mathf.Clamp(center.x, floorSize.x * -0.5f, floorSize.x * 0.5f),
+                Mathf.Clamp(center.y, floorSize.y * -0.5f, floorSize.y * 0.5f));
+            string id = $"user_wall_{nextWallId:000}";
+            nextWallId++;
+            NavigationScenarioWallSpec wallSpec = new(
+                id,
+                $"Navigation User Wall {userWalls.Count + 1}",
+                new Vector3(clampedCenter.x, wallHeight * 0.5f, clampedCenter.y),
+                new Vector3(safeLength, wallHeight, safeThickness),
+                rotationYDegrees);
+            userWalls.Add(wallSpec);
+            CreateWall(wallSpec, blockedRuntimeMaterial, episodeEvents, trackUserWall: true);
+        }
+
+        public void RemoveLastUserWall()
+        {
+            if (userWalls.Count == 0)
+            {
+                return;
+            }
+
+            int index = userWalls.Count - 1;
+            userWalls.RemoveAt(index);
+            if (index < wallObjects.Count && wallObjects[index] != null)
+            {
+                Destroy(wallObjects[index]);
+            }
+
+            if (index < wallObjects.Count)
+            {
+                wallObjects.RemoveAt(index);
+            }
+        }
+
+        public void ClearUserWalls()
+        {
+            userWalls.Clear();
+            foreach (GameObject wallObject in wallObjects)
+            {
+                if (wallObject != null)
+                {
+                    Destroy(wallObject);
+                }
+            }
+
+            wallObjects.Clear();
+        }
+
+        public IReadOnlyList<NavigationScenarioWallSpec> GetUserWalls()
+        {
+            return userWalls;
+        }
+
         private NavigationScenarioBundleSource CreateScenarioBundleSource(string scenarioId)
         {
             NavigationScenarioBundleSource source = new()
@@ -321,6 +433,7 @@ namespace EnvForge.Navigation
                 SegmentationImageWidth = SegmentationImageWidth,
                 SegmentationImageHeight = SegmentationImageHeight,
                 MaxEpisodeSteps = MaxEpisodeSteps,
+                UserWalls = userWalls,
             };
             trainingSettings.ApplyTo(source);
             return source;

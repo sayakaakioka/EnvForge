@@ -5,6 +5,7 @@ using System.Linq;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace EnvForge.Navigation.Inference
 {
@@ -12,7 +13,7 @@ namespace EnvForge.Navigation.Inference
     [RequireComponent(typeof(Rigidbody))]
     public sealed class NavigationModelInferenceController : MonoBehaviour
     {
-        [SerializeField] private int decisionIntervalFrames = 5;
+        [SerializeField] private int decisionIntervalFrames = 1;
 
         private const int ImageObservationChannels = 3;
         private const int ImageObservationHeight = 84;
@@ -22,10 +23,7 @@ namespace EnvForge.Navigation.Inference
         private const int FlatNavigationFinalObservationValueCount = ImageObservationValueCount + NumericObservationValueCount;
         private const float TrainingForwardStepMeters = 0.2f;
         private const float TrainingTurnDegreesPerStep = 15f;
-        private const float SemanticRayNearMeters = 0.05f;
-        private const float SemanticRayRangeMeters = 5f;
-        private const float SemanticRayFovDegrees = 70f;
-        private const float SemanticRayOriginHeightMeters = 0.15f;
+        private const float TrainingStepSeconds = 0.1f;
 
         private readonly float[] observationBuffer = new float[NavigationGoalObservation.ValueCount];
         private readonly float[] robotBuffer = new float[NavigationGoalObservation.RobotValueCount];
@@ -39,14 +37,19 @@ namespace EnvForge.Navigation.Inference
         private Rigidbody body;
         private NavigationLiveController liveController;
         private NavigationGoalObservationProvider observationProvider;
+        private Camera segmentationCamera;
+        private RenderTexture imageObservationTexture;
+        private Texture2D imageObservationReadback;
         private InferenceSession session;
         private string outputName;
         private IReadOnlyList<ModelInputBinding> inputBindings = Array.Empty<ModelInputBinding>();
+        private float desiredCameraMountHeightMeters;
         private bool isRunning;
         private string modelPath;
         private string statusSummary = "Inference: off";
         private string lastActionSummary = "action none";
         private string lastObservationSummary = "obs none";
+        private string lastImageObservationSummary = "image obs none";
         private string lastErrorDetails = string.Empty;
 
         public bool IsRunning => isRunning;
@@ -57,7 +60,25 @@ namespace EnvForge.Navigation.Inference
 
         public string LastObservationSummary => lastObservationSummary;
 
+        public string LastImageObservationSummary => lastImageObservationSummary;
+
         public string LastErrorDetails => lastErrorDetails;
+
+        public float CameraMountHeightMeters
+        {
+            get
+            {
+                return desiredCameraMountHeightMeters;
+            }
+        }
+
+        public void StepInferenceForAutomation()
+        {
+            if (isRunning)
+            {
+                StepInference();
+            }
+        }
 
         public void Configure(
             AgentMotor agentMotor,
@@ -71,16 +92,71 @@ namespace EnvForge.Navigation.Inference
             observationProvider = observations;
         }
 
+        public void SetCameraMountHeightMeters(float mountHeightMeters)
+        {
+            if (segmentationCamera == null)
+            {
+                segmentationCamera = GetComponentInChildren<Camera>(includeInactive: true);
+            }
+
+            if (segmentationCamera == null)
+            {
+                return;
+            }
+
+            desiredCameraMountHeightMeters = Mathf.Max(0.001f, mountHeightMeters);
+            ApplyCameraMountHeightLocalPosition();
+        }
+
+        private void ApplyCameraMountHeightLocalPosition()
+        {
+            if (segmentationCamera == null)
+            {
+                return;
+            }
+
+            Vector3 localPosition = segmentationCamera.transform.localPosition;
+            segmentationCamera.transform.localPosition = new Vector3(
+                localPosition.x,
+                WorldCameraHeightToLocalY(desiredCameraMountHeightMeters),
+                localPosition.z);
+        }
+
+        private float WorldCameraHeightToLocalY(float mountHeightMeters)
+        {
+            return mountHeightMeters - transform.position.y;
+        }
+
+        public bool SaveLastImageObservationPng(string outputPath)
+        {
+            if (imageObservationReadback == null || string.IsNullOrWhiteSpace(outputPath))
+            {
+                return false;
+            }
+
+            string directory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.WriteAllBytes(outputPath, imageObservationReadback.EncodeToPNG());
+            return true;
+        }
+
         private void Awake()
         {
             motor = GetComponent<AgentMotor>();
             body = GetComponent<Rigidbody>();
             liveController = GetComponent<NavigationLiveController>();
+            segmentationCamera = GetComponentInChildren<Camera>(includeInactive: true);
+            desiredCameraMountHeightMeters = segmentationCamera == null ? 0f : segmentationCamera.transform.position.y;
         }
 
         private void OnDisable()
         {
             StopInference();
+            ReleaseImageObservationResources();
         }
 
         private void Update()
@@ -177,6 +253,7 @@ namespace EnvForge.Navigation.Inference
                 statusSummary = "Inference: off";
                 lastActionSummary = "action none";
                 lastObservationSummary = "obs none";
+                lastImageObservationSummary = "image obs none";
                 lastErrorDetails = string.Empty;
             }
             else
@@ -206,7 +283,7 @@ namespace EnvForge.Navigation.Inference
                 RequiresInputSource(ModelInputSource.ImageObservation) ||
                 RequiresInputSource(ModelInputSource.FlatNavigationFinalObservation);
             if (needsImageObservation &&
-                !TryCaptureImageObservation(observation, imageObservationBuffer))
+                !TryCaptureImageObservation(imageObservationBuffer))
             {
                 motor?.Stop();
                 statusSummary = "Inference: image observation unavailable";
@@ -498,15 +575,9 @@ namespace EnvForge.Navigation.Inference
                 return;
             }
 
-            float decisionSeconds = Mathf.Max(1, decisionIntervalFrames) * Time.fixedDeltaTime;
-            if (decisionSeconds <= 0f)
-            {
-                decisionSeconds = 0.1f;
-            }
-
             motor.SetMotionProfile(
-                TrainingForwardStepMeters / decisionSeconds,
-                TrainingTurnDegreesPerStep / decisionSeconds);
+                TrainingForwardStepMeters / TrainingStepSeconds,
+                TrainingTurnDegreesPerStep / TrainingStepSeconds);
         }
 
         private static void WriteNumericObservation(NavigationGoalObservation observation, float[] values)
@@ -519,34 +590,118 @@ namespace EnvForge.Navigation.Inference
             values[1] = distance;
         }
 
-        private bool TryCaptureImageObservation(NavigationGoalObservation observation, float[] values)
+        private bool TryCaptureImageObservation(float[] values)
         {
             if (values == null || values.Length < ImageObservationValueCount)
             {
                 return false;
             }
 
-            Array.Clear(values, 0, ImageObservationValueCount);
-            int planeSize = ImageObservationHeight * ImageObservationWidth;
-            Vector3 origin = new(observation.RobotX, transform.position.y + SemanticRayOriginHeightMeters, observation.RobotZ);
+            return TryCaptureCameraImageObservation(values);
+        }
 
-            for (int row = 0; row < ImageObservationHeight; row++)
+        private bool TryCaptureCameraImageObservation(float[] values)
+        {
+            if (segmentationCamera == null ||
+                SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
             {
-                float rowRatio = 1f - row / Mathf.Max(1f, ImageObservationHeight - 1f);
-                float sampleDistance = SemanticRayNearMeters + rowRatio * (SemanticRayRangeMeters - SemanticRayNearMeters);
-                for (int column = 0; column < ImageObservationWidth; column++)
-                {
-                    float columnRatio = column / Mathf.Max(1f, ImageObservationWidth - 1f) - 0.5f;
-                    float rayDegrees = observation.RobotRotationYDegrees + columnRatio * SemanticRayFovDegrees;
-                    Vector3 direction = new(Mathf.Sin(rayDegrees * Mathf.Deg2Rad), 0f, Mathf.Cos(rayDegrees * Mathf.Deg2Rad));
-                    bool blocked = IsSemanticRayBlocked(origin, direction, sampleDistance);
-                    int pixelIndex = row * ImageObservationWidth + column;
-                    values[planeSize + pixelIndex] = blocked ? 0f : 1f;
-                    values[planeSize * 2 + pixelIndex] = blocked ? 1f : 0f;
-                }
+                return false;
             }
 
+            ApplyCameraMountHeightLocalPosition();
+            EnsureImageObservationResources();
+            RenderTexture previousTargetTexture = segmentationCamera.targetTexture;
+            RenderTexture previousActiveTexture = RenderTexture.active;
+            try
+            {
+                segmentationCamera.targetTexture = imageObservationTexture;
+                segmentationCamera.Render();
+                RenderTexture.active = imageObservationTexture;
+                imageObservationReadback.ReadPixels(new Rect(0, 0, ImageObservationWidth, ImageObservationHeight), 0, 0);
+                imageObservationReadback.Apply();
+
+                Color32[] pixels = imageObservationReadback.GetPixels32();
+                int planeSize = ImageObservationHeight * ImageObservationWidth;
+                for (int row = 0; row < ImageObservationHeight; row++)
+                {
+                    int flippedRow = ImageObservationHeight - 1 - row;
+                    for (int column = 0; column < ImageObservationWidth; column++)
+                    {
+                        int sourceIndex = flippedRow * ImageObservationWidth + column;
+                        int targetIndex = row * ImageObservationWidth + column;
+                        Color32 pixel = pixels[sourceIndex];
+                        values[targetIndex] = pixel.r / 255f;
+                        values[planeSize + targetIndex] = pixel.g / 255f;
+                        values[planeSize * 2 + targetIndex] = pixel.b / 255f;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Camera image observation capture failed. {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                segmentationCamera.targetTexture = previousTargetTexture;
+                RenderTexture.active = previousActiveTexture;
+            }
+
+            UpdateImageObservationSummary(values, "unity-camera");
             return true;
+        }
+
+        private void UpdateImageObservationSummary(float[] values, string source)
+        {
+            int planeSize = ImageObservationHeight * ImageObservationWidth;
+            double red = 0d;
+            double green = 0d;
+            double blue = 0d;
+            for (int i = 0; i < planeSize; i++)
+            {
+                red += values[i];
+                green += values[planeSize + i];
+                blue += values[planeSize * 2 + i];
+            }
+
+            lastImageObservationSummary =
+                $"image {source} mean r {red / planeSize:0.000} g {green / planeSize:0.000} b {blue / planeSize:0.000}";
+        }
+
+        private void EnsureImageObservationResources()
+        {
+            if (imageObservationTexture == null)
+            {
+                imageObservationTexture = new RenderTexture(ImageObservationWidth, ImageObservationHeight, 16, RenderTextureFormat.ARGB32)
+                {
+                    name = "EnvForge Image Observation",
+                };
+                imageObservationTexture.Create();
+            }
+
+            if (imageObservationReadback == null)
+            {
+                imageObservationReadback = new Texture2D(ImageObservationWidth, ImageObservationHeight, TextureFormat.RGB24, mipChain: false)
+                {
+                    name = "EnvForge Image Observation Readback",
+                };
+            }
+        }
+
+        private void ReleaseImageObservationResources()
+        {
+            if (imageObservationTexture != null)
+            {
+                imageObservationTexture.Release();
+                Destroy(imageObservationTexture);
+                imageObservationTexture = null;
+            }
+
+            if (imageObservationReadback != null)
+            {
+                Destroy(imageObservationReadback);
+                imageObservationReadback = null;
+            }
         }
 
         private void WriteFlatNavigationFinalObservation()
@@ -563,28 +718,6 @@ namespace EnvForge.Navigation.Inference
                 flatNavigationFinalObservationBuffer,
                 ImageObservationValueCount,
                 NumericObservationValueCount);
-        }
-
-        private bool IsSemanticRayBlocked(Vector3 origin, Vector3 direction, float distance)
-        {
-            RaycastHit[] hits = Physics.RaycastAll(
-                origin,
-                direction,
-                distance,
-                Physics.DefaultRaycastLayers,
-                QueryTriggerInteraction.Ignore);
-            for (int i = 0; i < hits.Length; i++)
-            {
-                RaycastHit hit = hits[i];
-                if (hit.rigidbody == body || hit.collider.transform.IsChildOf(transform))
-                {
-                    continue;
-                }
-
-                return true;
-            }
-
-            return false;
         }
 
         private static int ProductWithDynamicBatchAsOne(int[] values)

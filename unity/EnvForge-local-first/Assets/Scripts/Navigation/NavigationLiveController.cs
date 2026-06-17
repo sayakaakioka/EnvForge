@@ -49,7 +49,12 @@ namespace EnvForge.Navigation
             ResetPose();
         }
 
-        private void ResetPose()
+        public void ReportWallCollision(string wallId)
+        {
+            ResetPose();
+        }
+
+        public void ResetPose()
         {
             motor?.Stop();
             if (body != null)
@@ -67,6 +72,16 @@ namespace EnvForge.Navigation
 
             transform.SetPositionAndRotation(startPosition, startRotation);
             Physics.SyncTransforms();
+        }
+
+        public void SetResetPose(Vector3 position, Quaternion rotation, bool applyImmediately = true)
+        {
+            startPosition = position;
+            startRotation = rotation;
+            if (applyImmediately)
+            {
+                ResetPose();
+            }
         }
 
         private static float ReadAxis(bool positive, bool negative)

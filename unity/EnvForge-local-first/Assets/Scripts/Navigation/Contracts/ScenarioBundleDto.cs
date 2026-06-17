@@ -55,6 +55,7 @@ namespace EnvForge.Navigation.Contracts
         public string id;
         public Vector2Dto center;
         public Vector2Dto size;
+        public float height;
         public float rotation_y_degrees;
     }
 
@@ -65,6 +66,7 @@ namespace EnvForge.Navigation.Contracts
         public string shape;
         public Vector2Dto center;
         public Vector2Dto size;
+        public float height;
         public float rotation_y_degrees;
     }
 
@@ -106,6 +108,13 @@ namespace EnvForge.Navigation.Contracts
         public int width;
         public int height;
         public string semantic_mode;
+        public float mount_height_meters;
+        public float mount_height_min_meters;
+        public float mount_height_max_meters;
+        public float pitch_degrees;
+        public float vertical_fov_degrees;
+        public float near_clip_meters;
+        public float far_clip_meters;
         public float range_meters;
         public string direction;
     }

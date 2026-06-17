@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using EnvForge.Navigation.Cloud;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace EnvForge.Navigation.Replay
 {
@@ -11,6 +13,10 @@ namespace EnvForge.Navigation.Replay
         private const float Padding = 12f;
         private const float Width = 680f;
         private const float Height = 320f;
+        private const float CompactWidth = 520f;
+        private const float CompactHeight = 118f;
+        private const float CompactButtonHeight = 42f;
+        private const float CompactIconButtonWidth = 48f;
         private const float BottomMargin = 32f;
         private const float ButtonHeight = 52f;
         private const float ButtonWidth = 70f;
@@ -32,6 +38,8 @@ namespace EnvForge.Navigation.Replay
         private GUIStyle labelStyle;
         private GUIStyle buttonStyle;
         private GUIStyle boxStyle;
+        private EnvForgeCloudRunPanel cloudRunPanel;
+        private NavigationWorldEditorPanel worldEditorPanel;
         private Texture2D previousIcon;
         private Texture2D playIcon;
         private Texture2D pauseIcon;
@@ -40,11 +48,14 @@ namespace EnvForge.Navigation.Replay
         private float replayClock;
         private int currentStepIndex;
         private bool isPlaying;
+        private bool showDetails;
         private string status = "Replay: no log loaded";
 
         public bool HasReplay => steps.Count > 0;
 
         public bool IsPlaying => isPlaying;
+
+        public bool IsExpandedPanelOpen => showOverlay && showDetails;
 
         public ReplayLogStepDto CurrentStep =>
             HasReplay ? steps[Mathf.Clamp(currentStepIndex, 0, steps.Count - 1)] : null;
@@ -164,6 +175,17 @@ namespace EnvForge.Navigation.Replay
 
         private void Update()
         {
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.f9Key.wasPressedThisFrame)
+            {
+                showOverlay = !showOverlay;
+            }
+
+            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && showDetails)
+            {
+                showDetails = false;
+            }
+
             if (!isPlaying || steps.Count < 2)
             {
                 return;
@@ -186,14 +208,79 @@ namespace EnvForge.Navigation.Replay
             ApplyInterpolatedStep();
         }
 
+        public void ShowDetailsForAutomation()
+        {
+            showOverlay = true;
+            showDetails = true;
+        }
+
         private void OnGUI()
         {
-            if (!showOverlay)
+            if (!showOverlay || !HasReplay || IsCloudPanelExpanded() || IsWorldPanelExpanded())
             {
                 return;
             }
 
             EnsureStyles();
+            if (!showDetails)
+            {
+                DrawCompactOverlay();
+                return;
+            }
+
+            DrawDetailsOverlay();
+        }
+
+        private void DrawCompactOverlay()
+        {
+            float boxWidth = Mathf.Min(CompactWidth, Screen.width - Padding * 2f);
+            float boxHeight = Mathf.Min(CompactHeight, Screen.height - Padding * 2f);
+            Rect boxRect = new(Padding, Screen.height - boxHeight - BottomMargin, boxWidth, boxHeight);
+            GUI.Box(boxRect, GUIContent.none, boxStyle);
+
+            Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f);
+            GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 32f), FormatCompactStatus(), labelStyle);
+
+            float buttonTop = contentRect.y + 40f;
+            float buttonLeft = contentRect.x;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), previousIcon, "Previous step"))
+            {
+                StepBackward();
+            }
+
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), playIcon, "Play"))
+            {
+                Play();
+            }
+
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), pauseIcon, "Pause"))
+            {
+                Pause();
+            }
+
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), stopIcon, "Stop"))
+            {
+                Stop();
+            }
+
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), nextIcon, "Next step"))
+            {
+                StepForward();
+            }
+
+            float detailsLeft = buttonLeft + CompactIconButtonWidth + ButtonGap;
+            if (GUI.Button(new Rect(detailsLeft, buttonTop, contentRect.xMax - detailsLeft, CompactButtonHeight), "Details", buttonStyle))
+            {
+                showDetails = true;
+            }
+        }
+
+        private void DrawDetailsOverlay()
+        {
             float boxWidth = Mathf.Min(Width, Screen.width - Padding * 2f);
             float boxHeight = Mathf.Min(Height, Screen.height - Padding * 2f);
             Rect boxRect = new(Padding, Screen.height - boxHeight - BottomMargin, boxWidth, boxHeight);
@@ -201,6 +288,10 @@ namespace EnvForge.Navigation.Replay
 
             Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f);
             GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 36f), "Replay", titleStyle);
+            if (GUI.Button(new Rect(contentRect.xMax - 128f, contentRect.y, 128f, 42f), "Compact", buttonStyle))
+            {
+                showDetails = false;
+            }
 
             float buttonTop = contentRect.y + 44f;
             float buttonLeft = contentRect.x;
@@ -236,6 +327,37 @@ namespace EnvForge.Navigation.Replay
             float detailTop = buttonTop + ButtonHeight + 12f;
             GUI.Label(new Rect(contentRect.x, detailTop, contentRect.width, 36f), FormatHudStatus(), labelStyle);
             GUI.Label(new Rect(contentRect.x, detailTop + 40f, contentRect.width, contentRect.yMax - detailTop - 40f), FormatCurrentStep(), labelStyle);
+        }
+
+        private string FormatCompactStatus()
+        {
+            ReplayLogStepDto step = CurrentStep;
+            if (step == null)
+            {
+                return status;
+            }
+
+            return $"{status} · step {step.step_index + 1}/{steps.Count} · reward {step.reward?.total:0.###}";
+        }
+
+        private bool IsCloudPanelExpanded()
+        {
+            if (cloudRunPanel == null)
+            {
+                cloudRunPanel = FindFirstObjectByType<EnvForgeCloudRunPanel>();
+            }
+
+            return cloudRunPanel != null && cloudRunPanel.IsExpandedPanelOpen;
+        }
+
+        private bool IsWorldPanelExpanded()
+        {
+            if (worldEditorPanel == null)
+            {
+                worldEditorPanel = FindFirstObjectByType<NavigationWorldEditorPanel>();
+            }
+
+            return worldEditorPanel != null && worldEditorPanel.IsExpandedPanelOpen;
         }
 
         private void DisableLiveControl()
@@ -449,7 +571,13 @@ namespace EnvForge.Navigation.Replay
             bool pressed = GUI.Button(rect, new GUIContent(string.Empty, tooltip), buttonStyle);
             if (Event.current.type == EventType.Repaint && icon != null)
             {
-                Rect iconRect = new(rect.x + 18f, rect.y + 12f, rect.width - 36f, rect.height - 24f);
+                float horizontalPadding = Mathf.Min(18f, rect.width * 0.26f);
+                float verticalPadding = Mathf.Min(12f, rect.height * 0.24f);
+                Rect iconRect = new(
+                    rect.x + horizontalPadding,
+                    rect.y + verticalPadding,
+                    rect.width - horizontalPadding * 2f,
+                    rect.height - verticalPadding * 2f);
                 GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit, true);
             }
 

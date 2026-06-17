@@ -10,11 +10,14 @@ namespace EnvForge.Navigation
 
         private NavigationMetrics navigationMetrics;
 
+        public float MaxExpectedDistanceMeters { get; private set; } = 1f;
+
         public void Configure(NavigationMetrics metrics, float maxDistance, float radius = 1.2f)
         {
             navigationMetrics = metrics;
+            MaxExpectedDistanceMeters = Mathf.Max(0.01f, maxDistance);
             goalRadius = Mathf.Max(0.01f, radius);
-            frontDistanceRangeMeters = Mathf.Max(0.01f, Mathf.Min(5f, maxDistance));
+            frontDistanceRangeMeters = Mathf.Max(0.01f, Mathf.Min(5f, MaxExpectedDistanceMeters));
         }
 
         public bool TryGetObservation(out NavigationGoalObservation observation)

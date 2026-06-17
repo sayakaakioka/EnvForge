@@ -7,30 +7,36 @@ using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace EnvForge.Navigation.Cloud
 {
     public sealed class EnvForgeCloudRunPanel : MonoBehaviour
     {
         private const float Padding = 12f;
-        private const float Width = 640f;
-        private const float Height = 320f;
-        private const float DetailsHeight = 560f;
+        private const float Width = 760f;
+        private const float Height = 390f;
+        private const float CompactWidth = 620f;
+        private const float CompactHeight = 136f;
+        private const float CompactButtonHeight = 42f;
+        private const float CompactTopMargin = 24f;
+        private const float DetailsHeight = 620f;
         private const float ButtonHeight = 54f;
         private const float ButtonGap = 8f;
-        private const float StatusHeight = 156f;
+        private const float StatusHeight = 222f;
         private const float StatusLineHeight = 38f;
-        private const float StatusLabelWidth = 124f;
-        private const int FontSize = 26;
-        private const int StatusFontSize = 30;
-        private const int SettingsFontSize = 28;
-        private const int ButtonFontSize = 26;
-        private const int PrimaryButtonFontSize = 26;
-        private const float SettingsWidth = 640f;
-        private const float SettingsHeight = 780f;
-        private const float SettingsButtonHeight = 58f;
-        private const float SettingsFieldHeight = 50f;
-        private const float SettingsLabelWidth = 245f;
+        private const float StatusLabelWidth = 148f;
+        private const int FontSize = 24;
+        private const int StatusFontSize = 28;
+        private const int SettingsFontSize = 22;
+        private const int ButtonFontSize = 24;
+        private const int PrimaryButtonFontSize = 24;
+        private const float SettingsWidth = 760f;
+        private const float SettingsHeight = 680f;
+        private const float SettingsButtonHeight = 50f;
+        private const float SettingsFieldHeight = 34f;
+        private const float SettingsLabelWidth = 300f;
+        private const float SettingsColumnLabelWidth = 178f;
         private const string BundledReplayResource = "EnvForge/navigation_default_replay";
 
         [SerializeField] private bool showPanel = true;
@@ -68,6 +74,7 @@ namespace EnvForge.Navigation.Cloud
         private GUIStyle labelStyle;
         private GUIStyle statusStyle;
         private GUIStyle detailStyle;
+        private GUIStyle compactDetailStyle;
         private GUIStyle settingsLabelStyle;
         private GUIStyle textFieldStyle;
         private GUIStyle settingsTextFieldStyle;
@@ -80,6 +87,9 @@ namespace EnvForge.Navigation.Cloud
         private string torchNumThreadsText;
         private string nStepsText;
         private string batchSizeText;
+        private string cameraMountHeightText;
+        private string cameraMountHeightMinText;
+        private string cameraMountHeightMaxText;
         private string gammaText;
         private string learningRateText;
         private string entCoefText;
@@ -92,6 +102,8 @@ namespace EnvForge.Navigation.Cloud
         private string rearAnglePenaltyText;
         private string inactivePenaltyText;
         private string movementThresholdText;
+
+        public bool IsExpandedPanelOpen => showTrainingSettings || showJobDetails;
 
         public void Configure(
             NavigationSceneBuilder builder,
@@ -120,6 +132,17 @@ namespace EnvForge.Navigation.Cloud
 
         private void Update()
         {
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.f10Key.wasPressedThisFrame)
+            {
+                showPanel = !showPanel;
+            }
+
+            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && IsExpandedPanelOpen)
+            {
+                CollapseExpandedPanel();
+            }
+
             ProcessResultStreamMessages();
         }
 
@@ -158,6 +181,12 @@ namespace EnvForge.Navigation.Cloud
             }
 
             EnsureStyles();
+            if (!IsExpandedPanelOpen)
+            {
+                DrawCompactPanel();
+                return;
+            }
+
             float boxWidth = Mathf.Min(Width, Screen.width - Padding * 2f);
             float boxHeight = Mathf.Min(Height, Screen.height - Padding * 2f);
             Rect boxRect = new(Screen.width - boxWidth - Padding, Padding, boxWidth, boxHeight);
@@ -166,15 +195,131 @@ namespace EnvForge.Navigation.Cloud
 
             if (showTrainingSettings)
             {
-                float settingsHeight = Mathf.Min(SettingsHeight, Screen.height - boxRect.yMax - Padding * 2f);
                 float settingsWidth = Mathf.Min(SettingsWidth, Screen.width - Padding * 2f);
-                DrawTrainingSettings(new Rect(Screen.width - settingsWidth - Padding, boxRect.yMax + Padding, settingsWidth, settingsHeight));
+                Rect settingsRect = BuildExpandedPanelRect(boxRect, settingsWidth, SettingsHeight);
+                DrawTrainingSettings(settingsRect);
             }
             else if (showJobDetails)
             {
-                float detailsHeight = Mathf.Min(DetailsHeight, Screen.height - boxRect.yMax - Padding * 2f);
-                DrawJobDetails(new Rect(Screen.width - boxWidth - Padding, boxRect.yMax + Padding, boxWidth, detailsHeight));
+                Rect detailsRect = BuildExpandedPanelRect(boxRect, boxWidth, DetailsHeight);
+                DrawJobDetails(detailsRect);
             }
+        }
+
+        private void DrawCompactPanel()
+        {
+            float boxWidth = Mathf.Min(CompactWidth, Screen.width - Padding * 2f);
+            float boxHeight = Mathf.Min(CompactHeight, Screen.height - Padding * 2f);
+            Rect boxRect = new(Screen.width - boxWidth - Padding, CompactTopMargin, boxWidth, boxHeight);
+            GUI.Box(boxRect, GUIContent.none, boxStyle);
+
+            Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxRect.width - Padding * 2f, boxRect.height - Padding * 2f);
+            GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 34f), FormatCompactStatus(), compactDetailStyle);
+            GUI.Label(new Rect(contentRect.x, contentRect.y + 34f, contentRect.width, 30f), FormatCompactJobSummary(), compactDetailStyle);
+
+            float buttonTop = contentRect.y + 70f;
+            float buttonWidth = (contentRect.width - ButtonGap * 4f) / 5f;
+            Rect replayRect = new(contentRect.x, buttonTop, buttonWidth, CompactButtonHeight);
+            Rect settingsRect = new(replayRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
+            Rect submitRect = new(settingsRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
+            Rect jobRect = new(submitRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
+            Rect inferenceRect = new(jobRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
+
+            if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), buttonStyle, !busy))
+            {
+                LoadLatestReplay();
+            }
+
+            if (DrawButton(settingsRect, new GUIContent("Settings", "Training settings"), buttonStyle, !busy))
+            {
+                showTrainingSettings = true;
+                showJobDetails = false;
+                SyncTextFromTrainingSettings();
+            }
+
+            if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
+            {
+                StartCoroutine(SubmitAndTrain());
+            }
+
+            if (DrawButton(jobRect, new GUIContent("Job", "Job details"), buttonStyle, !busy))
+            {
+                showTrainingSettings = false;
+                showJobDetails = true;
+            }
+
+            GUIStyle inferenceButtonStyle = inferenceController != null && inferenceController.IsRunning
+                ? selectedButtonStyle
+                : buttonStyle;
+            if (DrawButton(inferenceRect, new GUIContent("Run AI", "Run downloaded model"), inferenceButtonStyle, !busy))
+            {
+                ToggleInferenceMode();
+            }
+        }
+
+        private string FormatCompactStatus()
+        {
+            string state = latestResult?.status;
+            if (string.IsNullOrWhiteSpace(state))
+            {
+                state = string.IsNullOrWhiteSpace(status) ? "Cloud: idle" : status;
+            }
+
+            return $"{Shorten(state, 22)} · stream {FormatCompactStreamState()} · events {resultStreamEventCount}";
+        }
+
+        private string FormatCompactJobSummary()
+        {
+            return $"{Shorten(GetVisibleTrainerSummary(), 28)} · {FormatSensorSummary(sceneBuilder?.TrainingSettings)}";
+        }
+
+        private string FormatCompactStreamState()
+        {
+            return resultStreamState switch
+            {
+                "not connected" => "off",
+                "connecting" => "connecting",
+                "connected" => "on",
+                "receiving" => "receiving",
+                "missing URL" => "no url",
+                _ => resultStreamState,
+            };
+        }
+
+        private static Rect BuildExpandedPanelRect(Rect anchorRect, float panelWidth, float preferredHeight)
+        {
+            float x = anchorRect.x;
+            float y = anchorRect.yMax + Padding;
+            float availableHeight = Screen.height - y - Padding;
+
+            if (Screen.width >= anchorRect.width + panelWidth + Padding * 3f)
+            {
+                x = anchorRect.x - panelWidth - Padding;
+                y = Mathf.Min(anchorRect.y + 210f, Screen.height - Padding - 320f);
+                availableHeight = Screen.height - y - Padding;
+            }
+
+            return new Rect(
+                Mathf.Max(Padding, x),
+                Mathf.Max(Padding, y),
+                panelWidth,
+                Mathf.Min(preferredHeight, Mathf.Max(280f, availableHeight)));
+        }
+
+        public void ShowTrainingSettingsForAutomation(bool rewardSettings)
+        {
+            showPanel = true;
+            showTrainingSettings = true;
+            showRewardSettings = rewardSettings;
+            showJobDetails = false;
+            SyncTextFromTrainingSettings();
+        }
+
+        public void ShowJobDetailsForAutomation()
+        {
+            showPanel = true;
+            showTrainingSettings = false;
+            showJobDetails = true;
         }
 
         private void DrawMainPanel(Rect boxRect)
@@ -187,13 +332,13 @@ namespace EnvForge.Navigation.Cloud
             Rect cfgRect = new(replayRect.xMax + ButtonGap, y, topButtonWidth, ButtonHeight);
             Rect inferenceRect = new(cfgRect.xMax + ButtonGap, y, topButtonWidth, ButtonHeight);
 
-            if (DrawButton(replayRect, new GUIContent("REPLAY", "Load replay"), primaryButtonStyle, !busy))
+            if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), primaryButtonStyle, !busy))
             {
                 LoadLatestReplay();
             }
 
             GUIStyle cfgButtonStyle = showTrainingSettings ? selectedButtonStyle : buttonStyle;
-            if (DrawButton(cfgRect, new GUIContent("CFG", "Training settings"), cfgButtonStyle, !busy))
+            if (DrawButton(cfgRect, new GUIContent("Settings", "Training settings"), cfgButtonStyle, !busy))
             {
                 showTrainingSettings = !showTrainingSettings;
                 showJobDetails = false;
@@ -203,7 +348,7 @@ namespace EnvForge.Navigation.Cloud
             GUIStyle inferenceButtonStyle = inferenceController != null && inferenceController.IsRunning
                 ? selectedButtonStyle
                 : buttonStyle;
-            if (DrawButton(inferenceRect, new GUIContent("AI", "Run downloaded model"), inferenceButtonStyle, !busy))
+            if (DrawButton(inferenceRect, new GUIContent("Run AI", "Run downloaded model"), inferenceButtonStyle, !busy))
             {
                 ToggleInferenceMode();
             }
@@ -214,24 +359,30 @@ namespace EnvForge.Navigation.Cloud
             Rect detailsRect = new(submitRect.xMax + ButtonGap, y, secondaryButtonWidth, ButtonHeight);
             Rect downloadRect = new(detailsRect.xMax + ButtonGap, y, secondaryButtonWidth, ButtonHeight);
 
-            if (DrawButton(submitRect, new GUIContent("SUBMIT", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
+            if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
             {
                 StartCoroutine(SubmitAndTrain());
             }
 
             GUIStyle detailsButtonStyle = showJobDetails ? selectedButtonStyle : buttonStyle;
-            if (DrawButton(detailsRect, new GUIContent("JOB", "Job details"), detailsButtonStyle, !busy))
+            if (DrawButton(detailsRect, new GUIContent("Job", "Job details"), detailsButtonStyle, !busy))
             {
                 ToggleJobDetails();
             }
 
-            if (DrawButton(downloadRect, new GUIContent("GET", "Download artifacts"), buttonStyle, !busy))
+            if (DrawButton(downloadRect, new GUIContent("Download", "Download artifacts"), buttonStyle, !busy))
             {
                 StartCoroutine(DownloadAvailableArtifacts());
             }
 
             y += ButtonHeight + ButtonGap * 2f;
             DrawHudStatus(new Rect(contentRect.x, y, contentRect.width, StatusHeight));
+        }
+
+        private void CollapseExpandedPanel()
+        {
+            showTrainingSettings = false;
+            showJobDetails = false;
         }
 
         private static bool DrawButton(Rect rect, GUIContent content, GUIStyle style, bool enabled)
@@ -477,6 +628,16 @@ namespace EnvForge.Navigation.Cloud
             Rect streamValueRect = new(streamLabelRect.xMax, streamLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
             GUI.Label(streamLabelRect, "STREAM", labelStyle);
             GUI.Label(streamValueRect, lines[3], detailStyle);
+
+            Rect sensorLabelRect = new(rect.x, rect.y + StatusLineHeight * 4f, StatusLabelWidth, StatusLineHeight);
+            Rect sensorValueRect = new(sensorLabelRect.xMax, sensorLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
+            GUI.Label(sensorLabelRect, "SENSOR", labelStyle);
+            GUI.Label(sensorValueRect, lines[4], detailStyle);
+
+            Rect ppoLabelRect = new(rect.x, rect.y + StatusLineHeight * 5f, StatusLabelWidth, StatusLineHeight);
+            Rect ppoValueRect = new(ppoLabelRect.xMax, ppoLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
+            GUI.Label(ppoLabelRect, "PPO", labelStyle);
+            GUI.Label(ppoValueRect, lines[5], detailStyle);
         }
 
         private string[] FormatHudStatusLines()
@@ -522,6 +683,8 @@ namespace EnvForge.Navigation.Cloud
                 scenario,
                 GetVisibleTrainerSummary(),
                 FormatResultStreamSummary(),
+                FormatSensorSummary(sceneBuilder?.TrainingSettings),
+                FormatPpoSummary(sceneBuilder?.TrainingSettings),
             };
         }
 
@@ -542,7 +705,28 @@ namespace EnvForge.Navigation.Cloud
                 return string.Empty;
             }
 
-            return $"{settings.PresetName} · {FormatSteps(settings.Timesteps)} · seed {settings.Seed}";
+            return $"{settings.PresetName} · {FormatSteps(settings.Timesteps)} · seed {settings.Seed} · " +
+                   $"envs {settings.NEnvs} · {FormatSensorSummary(settings)}";
+        }
+
+        private static string FormatSensorSummary(NavigationTrainingSettings settings)
+        {
+            if (settings == null)
+            {
+                return "camera none";
+            }
+
+            return $"camera h {settings.CameraMountHeightMeters:0.##}m · range {settings.CameraMountHeightMinMeters:0.##}-{settings.CameraMountHeightMaxMeters:0.##}m";
+        }
+
+        private static string FormatPpoSummary(NavigationTrainingSettings settings)
+        {
+            if (settings == null)
+            {
+                return "ppo none";
+            }
+
+            return $"n_steps {settings.NSteps} · batch {settings.BatchSize} · lr {settings.LearningRate:0.######}";
         }
 
         private static string FormatSteps(int timesteps)
@@ -595,6 +779,9 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Label($"Job: {Shorten(submissionId, 18)}", detailStyle);
             GUILayout.Label($"Scenario: {activeScenarioId ?? "none"}", detailStyle);
             GUILayout.Label($"Trainer: {GetVisibleTrainerSummary()}", detailStyle);
+            GUILayout.Label($"Settings: {GetVisibleSettingsSummary()}", detailStyle);
+            GUILayout.Label($"Sensor: {FormatSensorSummary(sceneBuilder?.TrainingSettings)}", detailStyle);
+            GUILayout.Label($"PPO: {FormatPpoSummary(sceneBuilder?.TrainingSettings)}", detailStyle);
             GUILayout.Label(FormatProgressSummary(), detailStyle);
 
             GUILayout.Space(8f);
@@ -793,10 +980,6 @@ namespace EnvForge.Navigation.Cloud
                 showRewardSettings = true;
             }
 
-            GUILayout.EndHorizontal();
-            GUILayout.Space(8f);
-
-            GUILayout.BeginHorizontal();
             if (GUILayout.Button("Smoke", GetPresetButtonStyle("Smoke"), GUILayout.Height(SettingsButtonHeight)))
             {
                 sceneBuilder.TrainingSettings.ApplySmokePreset();
@@ -827,38 +1010,63 @@ namespace EnvForge.Navigation.Cloud
 
         private void DrawTrainerSettings()
         {
+            GUILayout.BeginHorizontal();
+            GUILayout.BeginVertical();
             GUILayout.Label("Training", settingsLabelStyle);
-            DrawIntField("timesteps", ref timestepsText, value => sceneBuilder.TrainingSettings.Timesteps = value);
-            DrawIntField("max episode", ref maxEpisodeStepsText, value => sceneBuilder.TrainingSettings.MaxEpisodeSteps = value);
-            DrawIntField("seed", ref seedText, value => sceneBuilder.TrainingSettings.Seed = value);
-            DrawIntField("n envs", ref nEnvsText, value => sceneBuilder.TrainingSettings.NEnvs = value);
-            DrawIntField("cpu", ref cpuCountText, value => sceneBuilder.TrainingSettings.CpuCount = value);
-            DrawIntField("torch th.", ref torchNumThreadsText, value => sceneBuilder.TrainingSettings.TorchNumThreads = value);
-            DrawIntField("n steps", ref nStepsText, value => sceneBuilder.TrainingSettings.NSteps = value);
-            DrawIntField("batch", ref batchSizeText, value => sceneBuilder.TrainingSettings.BatchSize = value);
-            DrawFloatField("gamma", ref gammaText, value => sceneBuilder.TrainingSettings.Gamma = value);
-            DrawFloatField("learn rate", ref learningRateText, value => sceneBuilder.TrainingSettings.LearningRate = value);
-            DrawFloatField("entropy", ref entCoefText, value => sceneBuilder.TrainingSettings.EntCoef = value);
-            DrawIntField("eval eps", ref evalEpisodesText, value => sceneBuilder.TrainingSettings.EvalEpisodes = value);
+            DrawIntField("timesteps", ref timestepsText, value => sceneBuilder.TrainingSettings.Timesteps = value, SettingsColumnLabelWidth);
+            DrawIntField("max episode", ref maxEpisodeStepsText, value => sceneBuilder.TrainingSettings.MaxEpisodeSteps = value, SettingsColumnLabelWidth);
+            DrawIntField("seed", ref seedText, value => sceneBuilder.TrainingSettings.Seed = value, SettingsColumnLabelWidth);
+            GUILayout.Space(8f);
+            GUILayout.Label("Camera", settingsLabelStyle);
+            DrawFloatField("mount height m", ref cameraMountHeightText, value => sceneBuilder.TrainingSettings.CameraMountHeightMeters = value, SettingsColumnLabelWidth);
+            DrawFloatField("height min m", ref cameraMountHeightMinText, value => sceneBuilder.TrainingSettings.CameraMountHeightMinMeters = value, SettingsColumnLabelWidth);
+            DrawFloatField("height max m", ref cameraMountHeightMaxText, value => sceneBuilder.TrainingSettings.CameraMountHeightMaxMeters = value, SettingsColumnLabelWidth);
+            GUILayout.EndVertical();
+
+            GUILayout.Space(18f);
+            GUILayout.BeginVertical();
+            GUILayout.Label("Workers", settingsLabelStyle);
+            DrawIntField("parallel envs", ref nEnvsText, value => sceneBuilder.TrainingSettings.NEnvs = value, SettingsColumnLabelWidth);
+            DrawIntField("trainer CPUs", ref cpuCountText, value => sceneBuilder.TrainingSettings.CpuCount = value, SettingsColumnLabelWidth);
+            DrawIntField("torch threads", ref torchNumThreadsText, value => sceneBuilder.TrainingSettings.TorchNumThreads = value, SettingsColumnLabelWidth);
+            GUILayout.Space(8f);
+            GUILayout.Label("PPO", settingsLabelStyle);
+            DrawIntField("n steps", ref nStepsText, value => sceneBuilder.TrainingSettings.NSteps = value, SettingsColumnLabelWidth);
+            DrawIntField("batch", ref batchSizeText, value => sceneBuilder.TrainingSettings.BatchSize = value, SettingsColumnLabelWidth);
+            DrawFloatField("gamma", ref gammaText, value => sceneBuilder.TrainingSettings.Gamma = value, SettingsColumnLabelWidth);
+            DrawFloatField("learning rate", ref learningRateText, value => sceneBuilder.TrainingSettings.LearningRate = value, SettingsColumnLabelWidth);
+            DrawFloatField("entropy", ref entCoefText, value => sceneBuilder.TrainingSettings.EntCoef = value, SettingsColumnLabelWidth);
+            DrawIntField("eval episodes", ref evalEpisodesText, value => sceneBuilder.TrainingSettings.EvalEpisodes = value, SettingsColumnLabelWidth);
+            GUILayout.EndVertical();
+            GUILayout.EndHorizontal();
         }
 
         private void DrawRewardSettings()
         {
-            GUILayout.Label("Reward", settingsLabelStyle);
-            DrawFloatField("goal", ref goalReachedRewardText, value => sceneBuilder.TrainingSettings.GoalReachedReward = value);
-            DrawFloatField("progress", ref goalProgressRewardText, value => sceneBuilder.TrainingSettings.GoalProgressReward = value);
-            DrawFloatField("collision", ref collisionPenaltyText, value => sceneBuilder.TrainingSettings.CollisionPenalty = value);
-            DrawFloatField("step", ref stepPenaltyText, value => sceneBuilder.TrainingSettings.StepPenalty = value);
-            DrawFloatField("wide angle", ref wideAnglePenaltyText, value => sceneBuilder.TrainingSettings.WideAnglePenalty = value);
-            DrawFloatField("rear angle", ref rearAnglePenaltyText, value => sceneBuilder.TrainingSettings.RearAnglePenalty = value);
-            DrawFloatField("inactive", ref inactivePenaltyText, value => sceneBuilder.TrainingSettings.InactivePenalty = value);
-            DrawFloatField("move th.", ref movementThresholdText, value => sceneBuilder.TrainingSettings.MovementThreshold = value);
+            GUILayout.BeginHorizontal();
+            GUILayout.BeginVertical();
+            GUILayout.Label("Goal", settingsLabelStyle);
+            DrawFloatField("goal", ref goalReachedRewardText, value => sceneBuilder.TrainingSettings.GoalReachedReward = value, SettingsColumnLabelWidth);
+            DrawFloatField("progress", ref goalProgressRewardText, value => sceneBuilder.TrainingSettings.GoalProgressReward = value, SettingsColumnLabelWidth);
+            DrawFloatField("collision", ref collisionPenaltyText, value => sceneBuilder.TrainingSettings.CollisionPenalty = value, SettingsColumnLabelWidth);
+            DrawFloatField("step", ref stepPenaltyText, value => sceneBuilder.TrainingSettings.StepPenalty = value, SettingsColumnLabelWidth);
+            GUILayout.EndVertical();
+
+            GUILayout.Space(18f);
+            GUILayout.BeginVertical();
+            GUILayout.Label("Shaping", settingsLabelStyle);
+            DrawFloatField("wide angle", ref wideAnglePenaltyText, value => sceneBuilder.TrainingSettings.WideAnglePenalty = value, SettingsColumnLabelWidth);
+            DrawFloatField("rear angle", ref rearAnglePenaltyText, value => sceneBuilder.TrainingSettings.RearAnglePenalty = value, SettingsColumnLabelWidth);
+            DrawFloatField("inactive", ref inactivePenaltyText, value => sceneBuilder.TrainingSettings.InactivePenalty = value, SettingsColumnLabelWidth);
+            DrawFloatField("move threshold", ref movementThresholdText, value => sceneBuilder.TrainingSettings.MovementThreshold = value, SettingsColumnLabelWidth);
+            GUILayout.EndVertical();
+            GUILayout.EndHorizontal();
         }
 
-        private void DrawIntField(string label, ref string text, Action<int> applyValue)
+        private void DrawIntField(string label, ref string text, Action<int> applyValue, float labelWidth = SettingsLabelWidth)
         {
             GUILayout.BeginHorizontal();
-            GUILayout.Label(label, settingsLabelStyle, GUILayout.Width(SettingsLabelWidth), GUILayout.Height(SettingsFieldHeight));
+            GUILayout.Label(label, settingsLabelStyle, GUILayout.Width(labelWidth), GUILayout.Height(SettingsFieldHeight));
             text = GUILayout.TextField(text, settingsTextFieldStyle, GUILayout.Height(SettingsFieldHeight));
             if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
             {
@@ -868,10 +1076,10 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.EndHorizontal();
         }
 
-        private void DrawFloatField(string label, ref string text, Action<float> applyValue)
+        private void DrawFloatField(string label, ref string text, Action<float> applyValue, float labelWidth = SettingsLabelWidth)
         {
             GUILayout.BeginHorizontal();
-            GUILayout.Label(label, settingsLabelStyle, GUILayout.Width(SettingsLabelWidth), GUILayout.Height(SettingsFieldHeight));
+            GUILayout.Label(label, settingsLabelStyle, GUILayout.Width(labelWidth), GUILayout.Height(SettingsFieldHeight));
             text = GUILayout.TextField(text, settingsTextFieldStyle, GUILayout.Height(SettingsFieldHeight));
             if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
             {
@@ -897,6 +1105,9 @@ namespace EnvForge.Navigation.Cloud
             torchNumThreadsText = settings.TorchNumThreads.ToString(CultureInfo.InvariantCulture);
             nStepsText = settings.NSteps.ToString(CultureInfo.InvariantCulture);
             batchSizeText = settings.BatchSize.ToString(CultureInfo.InvariantCulture);
+            cameraMountHeightText = settings.CameraMountHeightMeters.ToString("0.######", CultureInfo.InvariantCulture);
+            cameraMountHeightMinText = settings.CameraMountHeightMinMeters.ToString("0.######", CultureInfo.InvariantCulture);
+            cameraMountHeightMaxText = settings.CameraMountHeightMaxMeters.ToString("0.######", CultureInfo.InvariantCulture);
             gammaText = settings.Gamma.ToString("0.####", CultureInfo.InvariantCulture);
             learningRateText = settings.LearningRate.ToString("0.######", CultureInfo.InvariantCulture);
             entCoefText = settings.EntCoef.ToString("0.######", CultureInfo.InvariantCulture);
@@ -1015,7 +1226,8 @@ namespace EnvForge.Navigation.Cloud
             string cpuSummary = training.cpu_count > 0
                 ? training.cpu_count.ToString(CultureInfo.InvariantCulture)
                 : "job";
-            return $"{training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed} · envs {training.n_envs} · cpu {cpuSummary} · th {training.torch_num_threads}";
+            return $"{training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed} · envs {training.n_envs} · " +
+                   $"cpu {cpuSummary} · th {training.torch_num_threads} · n_steps {training.n_steps} · batch {training.batch_size}";
         }
 
         private GUIStyle GetPresetButtonStyle(string presetName)
@@ -1033,6 +1245,7 @@ namespace EnvForge.Navigation.Cloud
                 labelStyle != null &&
                 statusStyle != null &&
                 detailStyle != null &&
+                compactDetailStyle != null &&
                 settingsLabelStyle != null &&
                 textFieldStyle != null &&
                 settingsTextFieldStyle != null &&
@@ -1100,6 +1313,12 @@ namespace EnvForge.Navigation.Cloud
                 alignment = TextAnchor.MiddleLeft,
             };
 
+            compactDetailStyle = new GUIStyle(detailStyle)
+            {
+                wordWrap = false,
+                clipping = TextClipping.Clip,
+            };
+
             settingsLabelStyle = new GUIStyle(labelStyle)
             {
                 fontSize = SettingsFontSize,
@@ -1120,7 +1339,7 @@ namespace EnvForge.Navigation.Cloud
                 fontSize = SettingsFontSize,
             };
 
-            Texture2D background = CreateTexture(new Color(0f, 0f, 0f, 0.72f));
+            Texture2D background = CreateTexture(new Color(0f, 0f, 0f, 0.9f));
 
             boxStyle = new GUIStyle(GUI.skin.box);
             boxStyle.normal.background = background;

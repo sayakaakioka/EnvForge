@@ -15,6 +15,9 @@ namespace EnvForge.Navigation.Cloud
         [SerializeField] private int torchNumThreads = 2;
         [SerializeField] private int nSteps = 32;
         [SerializeField] private int batchSize = 32;
+        [SerializeField] private float cameraMountHeightMeters = NavigationScenarioBundleDefaults.CameraMountHeightMeters;
+        [SerializeField] private float cameraMountHeightMinMeters = NavigationScenarioBundleDefaults.CameraMountHeightMinMeters;
+        [SerializeField] private float cameraMountHeightMaxMeters = NavigationScenarioBundleDefaults.CameraMountHeightMaxMeters;
         [SerializeField] private float gamma = 0.99f;
         [SerializeField] private float learningRate = 0.0003f;
         [SerializeField] private float entCoef;
@@ -40,6 +43,9 @@ namespace EnvForge.Navigation.Cloud
         public int TorchNumThreads { get => torchNumThreads <= 0 ? 2 : torchNumThreads; set => SetValue(ref torchNumThreads, Mathf.Max(1, value)); }
         public int NSteps { get => nSteps; set => SetValue(ref nSteps, Mathf.Max(1, value)); }
         public int BatchSize { get => batchSize; set => SetValue(ref batchSize, Mathf.Max(1, value)); }
+        public float CameraMountHeightMeters { get => cameraMountHeightMeters; set => SetValue(ref cameraMountHeightMeters, Mathf.Max(0.001f, value)); }
+        public float CameraMountHeightMinMeters { get => cameraMountHeightMinMeters; set => SetValue(ref cameraMountHeightMinMeters, Mathf.Max(0.001f, value)); }
+        public float CameraMountHeightMaxMeters { get => cameraMountHeightMaxMeters; set => SetValue(ref cameraMountHeightMaxMeters, Mathf.Max(0.001f, value)); }
         public float Gamma { get => gamma; set => SetValue(ref gamma, Mathf.Clamp(value, 0.0001f, 1f)); }
         public float LearningRate { get => learningRate; set => SetValue(ref learningRate, Mathf.Max(0.000001f, value)); }
         public float EntCoef { get => entCoef; set => SetValue(ref entCoef, Mathf.Max(0f, value)); }
@@ -64,6 +70,9 @@ namespace EnvForge.Navigation.Cloud
             TorchNumThreads = 2;
             NSteps = 32;
             BatchSize = 32;
+            CameraMountHeightMeters = NavigationScenarioBundleDefaults.CameraMountHeightMeters;
+            CameraMountHeightMinMeters = NavigationScenarioBundleDefaults.CameraMountHeightMinMeters;
+            CameraMountHeightMaxMeters = NavigationScenarioBundleDefaults.CameraMountHeightMaxMeters;
             Gamma = 0.99f;
             LearningRate = 0.0003f;
             EntCoef = 0.0f;
@@ -91,6 +100,9 @@ namespace EnvForge.Navigation.Cloud
             TorchNumThreads = 2;
             NSteps = 512;
             BatchSize = 64;
+            CameraMountHeightMeters = NavigationScenarioBundleDefaults.CameraMountHeightMeters;
+            CameraMountHeightMinMeters = NavigationScenarioBundleDefaults.CameraMountHeightMinMeters;
+            CameraMountHeightMaxMeters = NavigationScenarioBundleDefaults.CameraMountHeightMaxMeters;
             Gamma = 0.99f;
             LearningRate = 0.0003f;
             EntCoef = 0.0005f;
@@ -117,6 +129,9 @@ namespace EnvForge.Navigation.Cloud
             source.TorchNumThreads = TorchNumThreads;
             source.NSteps = NSteps;
             source.BatchSize = BatchSize;
+            source.CameraMountHeightMeters = CameraMountHeightMeters;
+            source.CameraMountHeightMinMeters = Mathf.Min(CameraMountHeightMinMeters, CameraMountHeightMaxMeters);
+            source.CameraMountHeightMaxMeters = Mathf.Max(CameraMountHeightMinMeters, CameraMountHeightMaxMeters);
             source.Gamma = Gamma;
             source.LearningRate = LearningRate;
             source.EntCoef = EntCoef;

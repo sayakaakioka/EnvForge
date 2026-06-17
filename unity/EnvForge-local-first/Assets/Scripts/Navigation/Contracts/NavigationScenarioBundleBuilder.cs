@@ -27,6 +27,20 @@ namespace EnvForge.Navigation.Contracts
 
         public int SegmentationImageHeight { get; set; }
 
+        public float CameraMountHeightMeters { get; set; } = 0.6f;
+
+        public float CameraMountHeightMinMeters { get; set; } = 0.6f;
+
+        public float CameraMountHeightMaxMeters { get; set; } = 0.6f;
+
+        public float CameraPitchDegrees { get; set; } = NavigationScenarioBundleDefaults.CameraPitchDegrees;
+
+        public float CameraVerticalFovDegrees { get; set; } = NavigationScenarioBundleDefaults.CameraVerticalFovDegrees;
+
+        public float CameraNearClipMeters { get; set; } = NavigationScenarioBundleDefaults.CameraNearClipMeters;
+
+        public float CameraFarClipMeters { get; set; } = NavigationScenarioBundleDefaults.CameraFarClipMeters;
+
         public int MaxEpisodeSteps { get; set; }
 
         public int TrainingTimesteps { get; set; } = 5000;
@@ -66,6 +80,8 @@ namespace EnvForge.Navigation.Contracts
         public float InactivePenalty { get; set; } = -0.1f;
 
         public float MovementThreshold { get; set; } = 0.001f;
+
+        public IReadOnlyList<NavigationScenarioWallSpec> UserWalls { get; set; } = new List<NavigationScenarioWallSpec>();
     }
 
     public static class NavigationScenarioBundleBuilder
@@ -76,7 +92,11 @@ namespace EnvForge.Navigation.Contracts
         public static ScenarioBundleDto Build(NavigationScenarioBundleSource source)
         {
             IReadOnlyList<NavigationScenarioWallSpec> boundaryWalls = NavigationScenarioLayout.CreateBoundaryWalls(source.FloorSize, source.WallHeight, source.WallThickness);
-            IReadOnlyList<NavigationScenarioWallSpec> innerWalls = NavigationScenarioLayout.CreateInnerWalls(source.WallHeight);
+            List<NavigationScenarioWallSpec> staticWalls = new(boundaryWalls);
+            if (source.UserWalls != null)
+            {
+                staticWalls.AddRange(source.UserWalls);
+            }
 
             return new ScenarioBundleDto
             {
@@ -97,8 +117,8 @@ namespace EnvForge.Navigation.Contracts
                 {
                     coordinate_system = CoordinateSystem,
                     bounds = BuildCenteredBounds(source.FloorSize),
-                    static_walls = BuildStaticWalls(boundaryWalls),
-                    static_obstacles = BuildStaticObstacles(innerWalls),
+                    static_walls = BuildStaticWalls(staticWalls),
+                    static_obstacles = new List<StaticObstacleDto>(),
                     goal = new GoalDto
                     {
                         id = "goal_001",
@@ -129,6 +149,13 @@ namespace EnvForge.Navigation.Contracts
                         width = source.SegmentationImageWidth,
                         height = source.SegmentationImageHeight,
                         semantic_mode = "traversable_vs_blocked",
+                        mount_height_meters = source.CameraMountHeightMeters,
+                        mount_height_min_meters = source.CameraMountHeightMinMeters,
+                        mount_height_max_meters = source.CameraMountHeightMaxMeters,
+                        pitch_degrees = source.CameraPitchDegrees,
+                        vertical_fov_degrees = source.CameraVerticalFovDegrees,
+                        near_clip_meters = source.CameraNearClipMeters,
+                        far_clip_meters = source.CameraFarClipMeters,
                     },
                     new SensorDto
                     {
@@ -193,6 +220,7 @@ namespace EnvForge.Navigation.Contracts
                     id = wallSpec.Id,
                     center = ToVector2Dto(wallSpec.Center),
                     size = ToSize2DDto(wallSpec.Size),
+                    height = wallSpec.Height,
                     rotation_y_degrees = wallSpec.RotationYDegrees,
                 });
             }
@@ -211,6 +239,7 @@ namespace EnvForge.Navigation.Contracts
                     shape = "box",
                     center = ToVector2Dto(wallSpec.Center),
                     size = ToSize2DDto(wallSpec.Size),
+                    height = wallSpec.Height,
                     rotation_y_degrees = wallSpec.RotationYDegrees,
                 });
             }
