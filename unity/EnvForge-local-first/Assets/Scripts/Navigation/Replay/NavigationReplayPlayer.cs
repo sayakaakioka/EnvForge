@@ -888,14 +888,12 @@ namespace EnvForge.Navigation.Replay
                 {
                     bool filled = icon switch
                     {
-                        ReplayIcon.Previous => InRect(x, y, 10, 16, 14, 48) ||
-                                               InLeftTriangle(x, y, 16, 32, 34, 16, 34, 48) ||
+                        ReplayIcon.Previous => InLeftTriangle(x, y, 16, 32, 34, 16, 34, 48) ||
                                                InLeftTriangle(x, y, 34, 32, 52, 16, 52, 48),
                         ReplayIcon.Play => InRightTriangle(x, y, 18, 14, 18, 50, 50, 32),
                         ReplayIcon.Pause => InRect(x, y, 19, 14, 27, 50) || InRect(x, y, 37, 14, 45, 50),
                         ReplayIcon.Stop => InRect(x, y, 18, 18, 46, 46),
-                        ReplayIcon.Next => InRect(x, y, 50, 16, 54, 48) ||
-                                           InRightTriangle(x, y, 12, 16, 12, 48, 30, 32) ||
+                        ReplayIcon.Next => InRightTriangle(x, y, 12, 16, 12, 48, 30, 32) ||
                                            InRightTriangle(x, y, 30, 16, 30, 48, 48, 32),
                         _ => false,
                     };

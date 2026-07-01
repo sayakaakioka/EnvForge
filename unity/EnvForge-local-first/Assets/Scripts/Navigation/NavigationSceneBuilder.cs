@@ -26,7 +26,7 @@ namespace EnvForge.Navigation
         [SerializeField] private float goalReachRadius = 1.2f;
         [SerializeField] private bool showSegmentationPreview = true;
         [SerializeField] private Rect segmentationPreviewRect = new(0.74f, 0.02f, 0.24f, 0.18f);
-        [SerializeField] private float agentCollisionRadius = 0.01f;
+        [SerializeField] private float agentCollisionRadius = 0.45f;
         [SerializeField] private Material passableSegmentationMaterial;
         [SerializeField] private Material blockedSegmentationMaterial;
         [SerializeField] private Material agentVisualMaterial;
@@ -204,6 +204,8 @@ namespace EnvForge.Navigation
 
             Rigidbody body = agent.AddComponent<Rigidbody>();
             body.mass = 1f;
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            body.interpolation = RigidbodyInterpolation.Interpolate;
 
             agent.AddComponent<AgentMotor>();
             Camera segmentationCamera = CreateSegmentationCamera(agent.transform);
