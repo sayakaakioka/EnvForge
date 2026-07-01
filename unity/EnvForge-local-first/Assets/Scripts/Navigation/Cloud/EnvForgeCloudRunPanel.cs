@@ -41,6 +41,7 @@ namespace EnvForge.Navigation.Cloud
         private const float SettingsColumnLabelWidth = 178f;
         private const float ResultPollIntervalSeconds = 30f;
         private const string BundledReplayResource = "EnvForge/navigation_default_replay";
+        private const string SettingsTextFieldFocusPrefix = "CloudSettingsTextField_";
 
         [SerializeField] private bool showPanel = true;
         [SerializeField] private string fallbackBaseUrl = "http://localhost:8000";
@@ -119,6 +120,8 @@ namespace EnvForge.Navigation.Cloud
         private string movementThresholdText;
 
         public bool IsExpandedPanelOpen => showTrainingSettings || showJobDetails;
+
+        public static bool IsTextInputFocused { get; private set; }
 
         public void Configure(
             NavigationSceneBuilder builder,
@@ -209,10 +212,12 @@ namespace EnvForge.Navigation.Cloud
         {
             if (!showPanel)
             {
+                IsTextInputFocused = false;
                 return;
             }
 
             EnsureStyles();
+            IsTextInputFocused = false;
             if (!IsExpandedPanelOpen)
             {
                 DrawCompactPanel();
@@ -1375,7 +1380,7 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.BeginVertical();
             GUILayout.Label("Training", settingsLabelStyle);
             DrawIntField("timesteps", ref timestepsText, value => sceneBuilder.TrainingSettings.Timesteps = value, SettingsColumnLabelWidth);
-            DrawIntField("max episode", ref maxEpisodeStepsText, value => sceneBuilder.TrainingSettings.MaxEpisodeSteps = value, SettingsColumnLabelWidth);
+            DrawIntField("max steps/ep", ref maxEpisodeStepsText, value => sceneBuilder.TrainingSettings.MaxEpisodeSteps = value, SettingsColumnLabelWidth);
             DrawIntField("seed", ref seedText, value => sceneBuilder.TrainingSettings.Seed = value, SettingsColumnLabelWidth);
             GUILayout.Space(8f);
             GUILayout.Label("Camera", settingsLabelStyle);
@@ -1428,7 +1433,9 @@ namespace EnvForge.Navigation.Cloud
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label(label, settingsLabelStyle, GUILayout.Width(labelWidth), GUILayout.Height(SettingsFieldHeight));
+            GUI.SetNextControlName(SettingsTextFieldFocusPrefix + label);
             text = GUILayout.TextField(text, settingsTextFieldStyle, GUILayout.Height(SettingsFieldHeight));
+            IsTextInputFocused = IsTextInputFocused || GUI.GetNameOfFocusedControl().StartsWith(SettingsTextFieldFocusPrefix, StringComparison.Ordinal);
             if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
             {
                 applyValue(value);
@@ -1441,7 +1448,9 @@ namespace EnvForge.Navigation.Cloud
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label(label, settingsLabelStyle, GUILayout.Width(labelWidth), GUILayout.Height(SettingsFieldHeight));
+            GUI.SetNextControlName(SettingsTextFieldFocusPrefix + label);
             text = GUILayout.TextField(text, settingsTextFieldStyle, GUILayout.Height(SettingsFieldHeight));
+            IsTextInputFocused = IsTextInputFocused || GUI.GetNameOfFocusedControl().StartsWith(SettingsTextFieldFocusPrefix, StringComparison.Ordinal);
             if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
             {
                 applyValue(value);
