@@ -8,21 +8,36 @@ namespace EnvForge.Navigation
 {
     public sealed class NavigationWorldEditorPanel : MonoBehaviour
     {
+        private enum WallDragMode
+        {
+            None,
+            Move,
+            ResizeNegative,
+            ResizePositive,
+            Rotate,
+        }
+
         private const float Padding = 12f;
         private const float CompactWidth = 520f;
         private const float CompactHeight = 112f;
         private const float DetailsWidth = 620f;
-        private const float DetailsHeight = 560f;
+        private const float DetailsHeight = 460f;
+        private const float PanelTop = Padding;
         private const float ButtonHeight = 42f;
         private const float FieldHeight = 34f;
         private const float LabelWidth = 180f;
         private const int FontSize = 22;
         private const int TitleFontSize = 26;
+        private const float HandleSize = 18f;
+        private const float HandlePickRadius = 22f;
+        private const float BodyPickRadius = 28f;
+        private const string TextFieldFocusPrefix = "WorldEditorTextField_";
 
         private NavigationSceneBuilder sceneBuilder;
         private bool showPanel = true;
         private bool showDetails;
         private GUIStyle buttonStyle;
+        private GUIStyle compactButtonStyle;
         private GUIStyle selectedButtonStyle;
         private GUIStyle labelStyle;
         private GUIStyle titleStyle;
@@ -30,14 +45,26 @@ namespace EnvForge.Navigation
         private GUIStyle boxStyle;
         private NavigationReplayPlayer replayPlayer;
         private Vector2 detailsScroll;
+        private Rect lastPanelRect;
+        private int selectedWallIndex = -1;
+        private WallDragMode dragMode;
+        private Vector2 dragOffset;
+        private Vector2 fixedResizeEndpoint;
+        private float dragStartRotation;
+        private float dragStartPointerAngle;
 
         private string floorWidthText;
         private string floorDepthText;
         private string wallXText = "0";
         private string wallZText = "0";
-        private string wallLengthText = "3";
-        private string wallThicknessText = "0.35";
-        private string wallRotationText = "0";
+        private string startXText = "0";
+        private string startZText = "0";
+        private string goalXText = "0";
+        private string goalZText = "0";
+
+        public static bool IsPointerEditingWorld { get; private set; }
+
+        public static bool IsTextInputFocused { get; private set; }
 
         public bool IsExpandedPanelOpen => showPanel && showDetails;
 
@@ -65,24 +92,32 @@ namespace EnvForge.Navigation
             if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && showDetails)
             {
                 showDetails = false;
+                dragMode = WallDragMode.None;
             }
+
+            HandleWorldMouseEditing();
         }
 
         private void OnGUI()
         {
             if (!showPanel || sceneBuilder == null || IsReplayPanelExpanded())
             {
+                lastPanelRect = Rect.zero;
+                IsTextInputFocused = false;
                 return;
             }
 
             EnsureStyles();
+            IsTextInputFocused = false;
             if (showDetails)
             {
                 DrawDetails();
+                DrawSelectedWallHandles();
                 return;
             }
 
             DrawCompact();
+            DrawSelectedWallHandles();
         }
 
         private bool IsReplayPanelExpanded()
@@ -98,35 +133,43 @@ namespace EnvForge.Navigation
         private void DrawCompact()
         {
             float width = Mathf.Min(CompactWidth, Screen.width - Padding * 2f);
-            Rect rect = new(Padding, Padding + 214f, width, CompactHeight);
+            Rect rect = new(Padding, PanelTop, width, CompactHeight);
+            lastPanelRect = rect;
             GUI.Box(rect, GUIContent.none, boxStyle);
 
             Rect content = new(rect.x + Padding, rect.y + Padding, rect.width - Padding * 2f, rect.height - Padding * 2f);
             GUI.Label(new Rect(content.x, content.y, content.width, 32f), FormatWorldSummary(), labelStyle);
 
             float buttonTop = content.y + 42f;
-            float buttonWidth = (content.width - Padding * 2f) / 3f;
-            if (GUI.Button(new Rect(content.x, buttonTop, buttonWidth, ButtonHeight), "Edit", buttonStyle))
+            float buttonWidth = (content.width - Padding * 3f) / 4f;
+            if (GUI.Button(new Rect(content.x, buttonTop, buttonWidth, ButtonHeight), "Edit", compactButtonStyle))
             {
                 showDetails = true;
                 SyncTextFromScene();
             }
 
-            if (GUI.Button(new Rect(content.x + buttonWidth + Padding, buttonTop, buttonWidth, ButtonHeight), "Add Wall", buttonStyle))
+            if (GUI.Button(new Rect(content.x + buttonWidth + Padding, buttonTop, buttonWidth, ButtonHeight), "Place Wall", compactButtonStyle))
             {
                 AddWallFromFields();
             }
 
-            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 2f, buttonTop, buttonWidth, ButtonHeight), "Undo", buttonStyle))
+            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 2f, buttonTop, buttonWidth, ButtonHeight), "Undo", compactButtonStyle))
             {
                 sceneBuilder.RemoveLastUserWall();
+                selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
+            }
+
+            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 3f, buttonTop, buttonWidth, ButtonHeight), sceneBuilder.NextCameraViewLabel, compactButtonStyle))
+            {
+                sceneBuilder.ToggleCameraView();
             }
         }
 
         private void DrawDetails()
         {
             float width = Mathf.Min(DetailsWidth, Screen.width - Padding * 2f);
-            Rect rect = new(Padding, Padding + 214f, width, DetailsHeight);
+            Rect rect = new(Padding, PanelTop, width, DetailsHeight);
+            lastPanelRect = rect;
             GUI.Box(rect, GUIContent.none, boxStyle);
 
             Rect content = new(rect.x + Padding, rect.y + Padding, rect.width - Padding * 2f, rect.height - Padding * 2f);
@@ -149,16 +192,29 @@ namespace EnvForge.Navigation
                 ApplyFloorSize();
             }
 
+            if (GUILayout.Button($"View: {sceneBuilder.NextCameraViewLabel}", buttonStyle, GUILayout.Height(ButtonHeight)))
+            {
+                sceneBuilder.ToggleCameraView();
+            }
+
+            GUILayout.Space(10f);
+            GUILayout.Label("Start / Goal", titleStyle, GUILayout.Height(FieldHeight));
+            DrawTextField($"start x 0..{sceneBuilder.FloorSize.x:0.#}", ref startXText);
+            DrawTextField($"start z 0..{sceneBuilder.FloorSize.y:0.#}", ref startZText);
+            DrawTextField($"goal x 0..{sceneBuilder.FloorSize.x:0.#}", ref goalXText);
+            DrawTextField($"goal z 0..{sceneBuilder.FloorSize.y:0.#}", ref goalZText);
+            if (GUILayout.Button("Apply Start / Goal", buttonStyle, GUILayout.Height(ButtonHeight)))
+            {
+                ApplyStartGoal();
+            }
+
             GUILayout.Space(10f);
             GUILayout.Label("Wall", titleStyle, GUILayout.Height(FieldHeight));
-            DrawTextField("center x", ref wallXText);
-            DrawTextField("center z", ref wallZText);
-            DrawTextField("length m", ref wallLengthText);
-            DrawTextField("thickness m", ref wallThicknessText);
-            DrawTextField("rotation deg", ref wallRotationText);
+            DrawTextField($"x 0..{sceneBuilder.FloorSize.x:0.#}", ref wallXText);
+            DrawTextField($"z 0..{sceneBuilder.FloorSize.y:0.#}", ref wallZText);
 
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Add Wall", buttonStyle, GUILayout.Height(ButtonHeight)))
+            if (GUILayout.Button("Place Wall", buttonStyle, GUILayout.Height(ButtonHeight)))
             {
                 AddWallFromFields();
             }
@@ -166,11 +222,14 @@ namespace EnvForge.Navigation
             if (GUILayout.Button("Undo", buttonStyle, GUILayout.Height(ButtonHeight)))
             {
                 sceneBuilder.RemoveLastUserWall();
+                selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
             }
 
             if (GUILayout.Button("Clear", buttonStyle, GUILayout.Height(ButtonHeight)))
             {
                 sceneBuilder.ClearUserWalls();
+                selectedWallIndex = -1;
+                dragMode = WallDragMode.None;
             }
 
             GUILayout.EndHorizontal();
@@ -182,7 +241,9 @@ namespace EnvForge.Navigation
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label(label, labelStyle, GUILayout.Width(LabelWidth), GUILayout.Height(FieldHeight));
+            GUI.SetNextControlName(TextFieldFocusPrefix + label);
             text = GUILayout.TextField(text, textFieldStyle, GUILayout.Height(FieldHeight));
+            IsTextInputFocused = GUI.GetNameOfFocusedControl().StartsWith(TextFieldFocusPrefix);
             GUILayout.EndHorizontal();
         }
 
@@ -202,7 +263,12 @@ namespace EnvForge.Navigation
             Vector2 size = sceneBuilder.FloorSize;
             floorWidthText = size.x.ToString("0.###", CultureInfo.InvariantCulture);
             floorDepthText = size.y.ToString("0.###", CultureInfo.InvariantCulture);
-            wallThicknessText = sceneBuilder.WallThickness.ToString("0.###", CultureInfo.InvariantCulture);
+            SyncStartGoalText();
+            if (!sceneBuilder.TryGetUserWall(selectedWallIndex, out _))
+            {
+                wallXText = (size.x * 0.5f).ToString("0.###", CultureInfo.InvariantCulture);
+                wallZText = (size.y * 0.5f).ToString("0.###", CultureInfo.InvariantCulture);
+            }
         }
 
         private void ApplyFloorSize()
@@ -212,21 +278,355 @@ namespace EnvForge.Navigation
             {
                 sceneBuilder.SetFloorSize(new Vector2(width, depth));
                 SyncTextFromScene();
+                SyncSelectedWallCenterText();
+                ApplyStartGoal();
             }
+        }
+
+        private void ApplyStartGoal()
+        {
+            if (TryParse(startXText, out float startX) &&
+                TryParse(startZText, out float startZ))
+            {
+                sceneBuilder.SetAgentStartPosition(UiToWorldPoint(new Vector2(startX, startZ)));
+            }
+
+            if (TryParse(goalXText, out float goalX) &&
+                TryParse(goalZText, out float goalZ))
+            {
+                sceneBuilder.SetGoalStartPosition(UiToWorldPoint(new Vector2(goalX, goalZ)));
+            }
+
+            SyncStartGoalText();
         }
 
         private void AddWallFromFields()
         {
             if (!TryParse(wallXText, out float x) ||
-                !TryParse(wallZText, out float z) ||
-                !TryParse(wallLengthText, out float length) ||
-                !TryParse(wallThicknessText, out float thickness) ||
-                !TryParse(wallRotationText, out float rotation))
+                !TryParse(wallZText, out float z))
             {
                 return;
             }
 
-            sceneBuilder.AddUserWall(new Vector2(x, z), length, thickness, rotation);
+            selectedWallIndex = sceneBuilder.AddDefaultUserWall(UiToWorldWallCenter(new Vector2(x, z)));
+            SyncSelectedWallCenterText();
+            dragMode = WallDragMode.None;
+        }
+
+        private void HandleWorldMouseEditing()
+        {
+            IsPointerEditingWorld = dragMode != WallDragMode.None;
+            if (sceneBuilder == null || IsReplayPanelExpanded())
+            {
+                IsPointerEditingWorld = false;
+                return;
+            }
+
+            Mouse mouse = Mouse.current;
+            Camera camera = Camera.main;
+            if (mouse == null || camera == null)
+            {
+                IsPointerEditingWorld = false;
+                return;
+            }
+
+            Vector2 screenPosition = mouse.position.ReadValue();
+            Vector2 guiPosition = new(screenPosition.x, Screen.height - screenPosition.y);
+            if (lastPanelRect.Contains(guiPosition))
+            {
+                if (mouse.leftButton.wasReleasedThisFrame || mouse.rightButton.wasReleasedThisFrame)
+                {
+                    dragMode = WallDragMode.None;
+                    IsPointerEditingWorld = false;
+                }
+
+                return;
+            }
+
+            Ray pointerRay = camera.ScreenPointToRay(screenPosition);
+            if (mouse.leftButton.wasPressedThisFrame)
+            {
+                if (TryFindWallHandleHit(screenPosition, camera, out int wallIndex, out WallDragMode nextDragMode, out Vector2 fixedEndpoint))
+                {
+                    selectedWallIndex = wallIndex;
+                    dragMode = nextDragMode;
+                    dragOffset = Vector2.zero;
+                    fixedResizeEndpoint = fixedEndpoint;
+                }
+                else if ((TryFindWallBodyHit(screenPosition, camera, out wallIndex) || sceneBuilder.TryRaycastUserWall(pointerRay, out wallIndex)) &&
+                    sceneBuilder.TryGetUserWall(wallIndex, out NavigationScenarioWallSpec moveWallSpec) &&
+                    TryGetGroundPoint(camera, screenPosition, out Vector3 moveStartPoint))
+                {
+                    selectedWallIndex = wallIndex;
+                    dragMode = WallDragMode.Move;
+                    Vector2 center = new(moveWallSpec.Center.x, moveWallSpec.Center.z);
+                    Vector2 groundPoint = new(moveStartPoint.x, moveStartPoint.z);
+                    dragOffset = center - groundPoint;
+                }
+                else
+                {
+                    dragMode = WallDragMode.None;
+                }
+            }
+
+            if (mouse.rightButton.wasPressedThisFrame &&
+                (TryFindWallBodyHit(screenPosition, camera, out int rotateWallIndex) || sceneBuilder.TryRaycastUserWall(pointerRay, out rotateWallIndex)) &&
+                sceneBuilder.TryGetUserWall(rotateWallIndex, out NavigationScenarioWallSpec rotateWallSpec) &&
+                TryGetGroundPoint(camera, screenPosition, out Vector3 rotateStartPoint))
+            {
+                Vector2 groundPoint = new(rotateStartPoint.x, rotateStartPoint.z);
+                selectedWallIndex = rotateWallIndex;
+                dragMode = WallDragMode.Rotate;
+                Vector2 center = new(rotateWallSpec.Center.x, rotateWallSpec.Center.z);
+                dragStartRotation = rotateWallSpec.RotationYDegrees;
+                dragStartPointerAngle = Mathf.Atan2(groundPoint.y - center.y, groundPoint.x - center.x) * Mathf.Rad2Deg;
+            }
+
+            if (mouse.leftButton.wasReleasedThisFrame)
+            {
+                dragMode = WallDragMode.None;
+            }
+
+            if (mouse.rightButton.wasReleasedThisFrame && dragMode == WallDragMode.Rotate)
+            {
+                dragMode = WallDragMode.None;
+            }
+
+            if (dragMode == WallDragMode.None ||
+                !sceneBuilder.TryGetUserWall(selectedWallIndex, out NavigationScenarioWallSpec wallSpec) ||
+                !TryGetGroundPoint(camera, screenPosition, out Vector3 dragPoint3))
+            {
+                IsPointerEditingWorld = false;
+                return;
+            }
+
+            IsPointerEditingWorld = true;
+            Vector2 dragPoint = new(dragPoint3.x, dragPoint3.z);
+            if (dragMode == WallDragMode.Move && mouse.leftButton.isPressed)
+            {
+                Vector2 nextCenter = dragPoint + dragOffset;
+                sceneBuilder.UpdateUserWall(selectedWallIndex, nextCenter, wallSpec.Size.x, wallSpec.RotationYDegrees);
+                SyncSelectedWallCenterText();
+                return;
+            }
+
+            if (dragMode == WallDragMode.Rotate && mouse.rightButton.isPressed)
+            {
+                Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
+                float pointerAngle = Mathf.Atan2(dragPoint.y - center.y, dragPoint.x - center.x) * Mathf.Rad2Deg;
+                sceneBuilder.UpdateUserWall(selectedWallIndex, center, wallSpec.Size.x, dragStartRotation + pointerAngle - dragStartPointerAngle);
+                SyncSelectedWallCenterText();
+                return;
+            }
+
+            if ((dragMode != WallDragMode.ResizeNegative && dragMode != WallDragMode.ResizePositive) ||
+                !mouse.leftButton.isPressed)
+            {
+                return;
+            }
+
+            Vector2 movingEndpoint = dragPoint;
+            Vector2 axis = GetWallAxis(wallSpec.RotationYDegrees);
+            float signedLength = Vector2.Dot(movingEndpoint - fixedResizeEndpoint, axis);
+            if (Mathf.Abs(signedLength) < 0.25f)
+            {
+                signedLength = signedLength < 0f ? -0.25f : 0.25f;
+            }
+
+            Vector2 centerAfterResize = fixedResizeEndpoint + axis * (signedLength * 0.5f);
+            sceneBuilder.UpdateUserWall(selectedWallIndex, centerAfterResize, Mathf.Abs(signedLength), wallSpec.RotationYDegrees);
+            SyncSelectedWallCenterText();
+        }
+
+        private bool TryFindWallHandleHit(Vector2 screenPosition, Camera camera, out int wallIndex, out WallDragMode nextDragMode, out Vector2 fixedEndpoint)
+        {
+            wallIndex = -1;
+            nextDragMode = WallDragMode.None;
+            fixedEndpoint = Vector2.zero;
+
+            for (int i = sceneBuilder.UserWallCount - 1; i >= 0; i--)
+            {
+                if (!sceneBuilder.TryGetUserWall(i, out NavigationScenarioWallSpec wallSpec))
+                {
+                    continue;
+                }
+
+                Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
+                Vector2 axis = GetWallAxis(wallSpec.RotationYDegrees);
+                Vector2 negativeEndpoint = center - axis * (wallSpec.Size.x * 0.5f);
+                Vector2 positiveEndpoint = center + axis * (wallSpec.Size.x * 0.5f);
+                if (IsNearScreenPoint(screenPosition, camera, positiveEndpoint))
+                {
+                    wallIndex = i;
+                    nextDragMode = WallDragMode.ResizePositive;
+                    fixedEndpoint = negativeEndpoint;
+                    return true;
+                }
+
+                if (IsNearScreenPoint(screenPosition, camera, negativeEndpoint))
+                {
+                    wallIndex = i;
+                    nextDragMode = WallDragMode.ResizeNegative;
+                    fixedEndpoint = positiveEndpoint;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryFindWallBodyHit(Vector2 screenPosition, Camera camera, out int wallIndex)
+        {
+            wallIndex = -1;
+            float bestDistance = float.PositiveInfinity;
+            for (int i = sceneBuilder.UserWallCount - 1; i >= 0; i--)
+            {
+                if (!sceneBuilder.TryGetUserWall(i, out NavigationScenarioWallSpec wallSpec))
+                {
+                    continue;
+                }
+
+                Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
+                Vector2 axis = GetWallAxis(wallSpec.RotationYDegrees);
+                Vector2 negativeEndpoint = center - axis * (wallSpec.Size.x * 0.5f);
+                Vector2 positiveEndpoint = center + axis * (wallSpec.Size.x * 0.5f);
+                if (!TryGetScreenPoint(camera, negativeEndpoint, out Vector2 screenA) ||
+                    !TryGetScreenPoint(camera, positiveEndpoint, out Vector2 screenB))
+                {
+                    continue;
+                }
+
+                float distance = DistanceToScreenSegment(screenPosition, screenA, screenB);
+                if (distance > BodyPickRadius || distance >= bestDistance)
+                {
+                    continue;
+                }
+
+                bestDistance = distance;
+                wallIndex = i;
+            }
+
+            return wallIndex >= 0;
+        }
+
+        private static bool IsNearScreenPoint(Vector2 screenPosition, Camera camera, Vector2 worldPoint)
+        {
+            if (!TryGetScreenPoint(camera, worldPoint, out Vector2 handleScreenPosition))
+            {
+                return false;
+            }
+
+            return (screenPosition - handleScreenPosition).sqrMagnitude <= HandlePickRadius * HandlePickRadius;
+        }
+
+        private static bool TryGetScreenPoint(Camera camera, Vector2 worldPoint, out Vector2 screenPoint)
+        {
+            Vector3 screen = camera.WorldToScreenPoint(new Vector3(worldPoint.x, 0.25f, worldPoint.y));
+            if (screen.z <= 0f)
+            {
+                screenPoint = Vector2.zero;
+                return false;
+            }
+
+            screenPoint = new Vector2(screen.x, screen.y);
+            return true;
+        }
+
+        private static float DistanceToScreenSegment(Vector2 point, Vector2 a, Vector2 b)
+        {
+            Vector2 segment = b - a;
+            float segmentLength = segment.sqrMagnitude;
+            if (segmentLength <= Mathf.Epsilon)
+            {
+                return Vector2.Distance(point, a);
+            }
+
+            float t = Mathf.Clamp01(Vector2.Dot(point - a, segment) / segmentLength);
+            return Vector2.Distance(point, a + segment * t);
+        }
+
+        private void SyncSelectedWallCenterText()
+        {
+            if (!sceneBuilder.TryGetUserWall(selectedWallIndex, out NavigationScenarioWallSpec wallSpec))
+            {
+                return;
+            }
+
+            Vector2 uiCenter = WorldToUiWallCenter(new Vector2(wallSpec.Center.x, wallSpec.Center.z));
+            wallXText = uiCenter.x.ToString("0.###", CultureInfo.InvariantCulture);
+            wallZText = uiCenter.y.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private Vector2 UiToWorldWallCenter(Vector2 uiCenter)
+        {
+            return UiToWorldPoint(uiCenter);
+        }
+
+        private Vector2 UiToWorldPoint(Vector2 uiPoint)
+        {
+            Vector2 size = sceneBuilder.FloorSize;
+            return new Vector2(uiPoint.x - size.x * 0.5f, uiPoint.y - size.y * 0.5f);
+        }
+
+        private Vector2 WorldToUiWallCenter(Vector2 worldCenter)
+        {
+            Vector2 size = sceneBuilder.FloorSize;
+            return new Vector2(worldCenter.x + size.x * 0.5f, worldCenter.y + size.y * 0.5f);
+        }
+
+        private void SyncStartGoalText()
+        {
+            Vector2 start = WorldToUiWallCenter(new Vector2(sceneBuilder.AgentStartPosition.x, sceneBuilder.AgentStartPosition.z));
+            Vector2 goal = WorldToUiWallCenter(new Vector2(sceneBuilder.GoalStartPosition.x, sceneBuilder.GoalStartPosition.z));
+            startXText = start.x.ToString("0.###", CultureInfo.InvariantCulture);
+            startZText = start.y.ToString("0.###", CultureInfo.InvariantCulture);
+            goalXText = goal.x.ToString("0.###", CultureInfo.InvariantCulture);
+            goalZText = goal.y.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private static bool TryGetGroundPoint(Camera camera, Vector2 screenPosition, out Vector3 point)
+        {
+            Ray ray = camera.ScreenPointToRay(screenPosition);
+            Plane ground = new(Vector3.up, Vector3.zero);
+            if (!ground.Raycast(ray, out float distance))
+            {
+                point = Vector3.zero;
+                return false;
+            }
+
+            point = ray.GetPoint(distance);
+            return true;
+        }
+
+        private void DrawSelectedWallHandles()
+        {
+            if (!sceneBuilder.TryGetUserWall(selectedWallIndex, out NavigationScenarioWallSpec wallSpec) || Camera.main == null)
+            {
+                return;
+            }
+
+            Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
+            Vector2 axis = GetWallAxis(wallSpec.RotationYDegrees);
+            DrawHandle(center - axis * (wallSpec.Size.x * 0.5f), selectedButtonStyle);
+            DrawHandle(center + axis * (wallSpec.Size.x * 0.5f), selectedButtonStyle);
+        }
+
+        private static Vector2 GetWallAxis(float rotationYDegrees)
+        {
+            float radians = -rotationYDegrees * Mathf.Deg2Rad;
+            return new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
+        }
+
+        private static void DrawHandle(Vector2 worldPoint, GUIStyle style)
+        {
+            Vector3 screen = Camera.main.WorldToScreenPoint(new Vector3(worldPoint.x, 0.25f, worldPoint.y));
+            if (screen.z <= 0f)
+            {
+                return;
+            }
+
+            Rect rect = new(screen.x - HandleSize * 0.5f, Screen.height - screen.y - HandleSize * 0.5f, HandleSize, HandleSize);
+            GUI.Box(rect, GUIContent.none, style);
         }
 
         private static bool TryParse(string text, out float value)
@@ -257,6 +657,13 @@ namespace EnvForge.Navigation
             buttonStyle.hover.textColor = Color.white;
             buttonStyle.active.textColor = Color.white;
             buttonStyle.focused.textColor = Color.white;
+            buttonStyle.clipping = TextClipping.Clip;
+
+            compactButtonStyle = new GUIStyle(buttonStyle)
+            {
+                fontSize = 18,
+                clipping = TextClipping.Clip,
+            };
 
             selectedButtonStyle = new GUIStyle(buttonStyle);
             selectedButtonStyle.normal.background = CreateTexture(new Color(1f, 0.72f, 0.12f, 1f));

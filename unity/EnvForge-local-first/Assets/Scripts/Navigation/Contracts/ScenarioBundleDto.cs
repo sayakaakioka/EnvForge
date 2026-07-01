@@ -218,7 +218,7 @@ namespace EnvForge.Navigation.Contracts
     {
         public ArtifactLocationDto model;
         public ArtifactLocationDto onnx_model;
-        public ArtifactLocationDto replay_log;
+        public ArtifactLocationDto replay_bundle;
     }
 
     [Serializable]
@@ -228,6 +228,33 @@ namespace EnvForge.Navigation.Contracts
         public string bucket;
         public string path;
         public string format;
+    }
+
+    [Serializable]
+    public sealed class ReplayBundleManifestDto
+    {
+        public string schema_version;
+        public string job_id;
+        public string scenario_id;
+        public int total_timesteps;
+        public List<ReplayBundleChunkDto> chunks;
+    }
+
+    [Serializable]
+    public sealed class ReplayBundleChunkDto
+    {
+        public string phase;
+        public string policy_mode;
+        public int checkpoint_step;
+        public int start_step;
+        public int end_step;
+        public string path;
+        public string format;
+        public int step_count;
+        public int episode_count;
+        public float success_rate;
+        public float avg_reward;
+        public float avg_steps;
     }
 
     [Serializable]

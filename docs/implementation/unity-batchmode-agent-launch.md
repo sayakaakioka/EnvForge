@@ -114,6 +114,52 @@ Make が使える環境では以下を実行する。
 `EnvForge.Editor.EnvForgeBuild.BuildWindows` を `-executeMethod` として呼び出す。
 Build Settings で有効な scene を使い、Windows Standalone 64-bit を生成する。
 
+## D3D11 での Editor 起動
+
+Qualcomm Adreno 環境では、Unity Editor の既定 graphics API が D3D12 になった場合に
+Windows 側の graphics stack と衝突し、Editor crash や画面全体のちらつきが疑われる。
+この環境では、調査中の標準起動を D3D11 固定に寄せる。
+
+Explorer から手動で起動する場合は、以下の `.cmd` launcher をダブルクリックする。
+この launcher は最後に必ず `pause` するため、Unity 起動に失敗した場合も error message
+を確認できる。
+
+    scripts\start-unity-d3d11.cmd
+
+PowerShell から直接起動する場合は以下を使う。
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\start-unity-d3d11.ps1
+
+`scripts\start-unity-d3d11.ps1` を Explorer から右クリックし、`PowerShell で実行`
+してもよい。この場合も、スクリプト自身の場所からリポジトリルートを推定するため、
+カレントディレクトリを手で合わせる必要はない。失敗時は error message を読めるよう、
+PowerShell window を閉じる前に Enter 入力を待つ。ただし、Windows の関連付けや
+実行ポリシーの影響で window がすぐ閉じる場合があるため、手動起動では `.cmd`
+launcher を優先する。
+
+Make が使える環境では以下でもよい。
+
+    make start_unity_d3d11
+
+このスクリプトは Unity Editor を `-force-d3d11` と `-projectPath unity\EnvForge-local-first`
+付きで起動するだけで、既に起動している Unity process を停止しない。既存の Editor
+を閉じるかどうかは、作業中の Play / Replay 状態を確認してから人間が判断する。
+同じ project が既に開いている場合、Unity が二つ目の Editor window を開かずに
+終了することがある。その場合は、現在の Editor を閉じてから launcher を再実行する。
+
+Unity Editor の path は `UNITY_EDITOR` または `-UnityEditor` で上書きできる。
+ローカル環境の絶対 path はドキュメントには固定せず、必要な実行時だけ指定する。
+
+    make start_unity_d3d11 UNITY_EDITOR="<Unity Editor path>"
+
+起動後は `Editor.log` で以下のような行を確認すると、D3D11 で起動できている。
+
+    Forcing GfxDevice: Direct3D 11
+    Direct3D:
+
+この手順は GUI Editor の起動用であり、batchmode 検証や Windows Standalone build
+の代替ではない。
+
 2026-06-15 時点では、Codex から以下の流れを確認済みである。
 
 - Unity Hub / Unity Editor の path 解決に成功した。

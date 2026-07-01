@@ -9,6 +9,10 @@ namespace EnvForge.Navigation.Contracts
         public string schema_version;
         public string scenario_id;
         public string job_id;
+        public string phase;
+        public int checkpoint_step;
+        public int env_index;
+        public string policy_mode;
         public string episode_id;
         public int step_index;
         public float time_seconds;

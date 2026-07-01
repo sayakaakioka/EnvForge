@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
@@ -31,12 +32,14 @@ namespace EnvForge.Navigation.Cloud
         private const int SettingsFontSize = 22;
         private const int ButtonFontSize = 24;
         private const int PrimaryButtonFontSize = 24;
+        private const int ReplayDisplayEnvIndex = 0;
         private const float SettingsWidth = 760f;
         private const float SettingsHeight = 680f;
         private const float SettingsButtonHeight = 50f;
         private const float SettingsFieldHeight = 34f;
         private const float SettingsLabelWidth = 300f;
         private const float SettingsColumnLabelWidth = 178f;
+        private const float ResultPollIntervalSeconds = 30f;
         private const string BundledReplayResource = "EnvForge/navigation_default_replay";
 
         [SerializeField] private bool showPanel = true;
@@ -61,6 +64,18 @@ namespace EnvForge.Navigation.Cloud
         private string lastResultStreamStatus;
         private string lastResultStreamReceivedAt;
         private bool resultStreamErrorReported;
+        private bool restoredJobNeedsResume;
+        private bool autoDownloadStarted;
+        private bool resultFetchInFlight;
+        private bool replayChunkLoadInFlight;
+        private int activeReplayChunkIndex = -1;
+        private int activeReplayTotalSteps;
+        private string activeReplayManifestPath;
+        private string activeReplayScenarioSource;
+        private ArtifactLocationDto activeReplayManifestArtifact;
+        private ReplayBundleManifestDto activeReplayManifest;
+        private readonly List<ReplayBundleChunkDto> activeReplayChunks = new();
+        private float nextResultPollAt;
         private string status = "Cloud: idle";
         private bool busy;
         private bool showTrainingSettings;
@@ -115,6 +130,12 @@ namespace EnvForge.Navigation.Cloud
         {
             sceneBuilder = builder;
             replayPlayer = player;
+            if (replayPlayer != null)
+            {
+                replayPlayer.WindowBoundaryRequested -= HandleReplayWindowBoundaryRequested;
+                replayPlayer.WindowBoundaryRequested += HandleReplayWindowBoundaryRequested;
+            }
+
             inferenceController = inference;
             fallbackBaseUrl = string.IsNullOrWhiteSpace(baseUrl) ? fallbackBaseUrl : baseUrl;
             apiClient = settings != null
@@ -128,6 +149,10 @@ namespace EnvForge.Navigation.Cloud
             resultWebSocketClient = new EnvForgeResultWebSocketClient();
             RestoreLatestJob();
             SyncTextFromTrainingSettings();
+            if (restoredJobNeedsResume)
+            {
+                StartCoroutine(ResumeLatestJob());
+            }
         }
 
         private void Update()
@@ -144,10 +169,16 @@ namespace EnvForge.Navigation.Cloud
             }
 
             ProcessResultStreamMessages();
+            PollLatestResultIfNeeded();
         }
 
         private void OnDestroy()
         {
+            if (replayPlayer != null)
+            {
+                replayPlayer.WindowBoundaryRequested -= HandleReplayWindowBoundaryRequested;
+            }
+
             resultWebSocketClient?.Dispose();
         }
 
@@ -165,12 +196,13 @@ namespace EnvForge.Navigation.Cloud
             activeJobSettingsSummary = string.IsNullOrWhiteSpace(latestJob.scenario_id)
                 ? latestJob.trainer_summary
                 : $"{latestJob.scenario_id} · {latestJob.trainer_summary}";
-            if (!string.IsNullOrWhiteSpace(latestJob.local_replay_path))
+            if (!string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path))
             {
-                loadedReplaySummary = $"Saved replay: {Shorten(latestJob.submission_id, 18)}";
+                loadedReplaySummary = $"Saved replay bundle: {Shorten(latestJob.submission_id, 18)}";
             }
 
             status = $"Cloud: restored {Shorten(latestJob.submission_id, 18)}";
+            restoredJobNeedsResume = !string.IsNullOrWhiteSpace(submissionId);
         }
 
         private void OnGUI()
@@ -227,7 +259,7 @@ namespace EnvForge.Navigation.Cloud
 
             if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), buttonStyle, !busy))
             {
-                LoadLatestReplay();
+                StartCoroutine(LoadLatestReplay());
             }
 
             if (DrawButton(settingsRect, new GUIContent("Settings", "Training settings"), buttonStyle, !busy))
@@ -334,7 +366,7 @@ namespace EnvForge.Navigation.Cloud
 
             if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), primaryButtonStyle, !busy))
             {
-                LoadLatestReplay();
+                StartCoroutine(LoadLatestReplay());
             }
 
             GUIStyle cfgButtonStyle = showTrainingSettings ? selectedButtonStyle : buttonStyle;
@@ -404,6 +436,8 @@ namespace EnvForge.Navigation.Cloud
             lastResultStreamStatus = null;
             lastResultStreamReceivedAt = null;
             resultStreamErrorReported = false;
+            autoDownloadStarted = false;
+            nextResultPollAt = Time.unscaledTime + ResultPollIntervalSeconds;
             status = "Cloud: submitting scenario";
 
             ScenarioBundleDto scenario = sceneBuilder.BuildScenarioBundle();
@@ -445,7 +479,71 @@ namespace EnvForge.Navigation.Cloud
             if (!failed)
             {
                 StartResultStream();
+                StartCoroutine(FetchLatestResult("submitted job"));
             }
+        }
+
+        private IEnumerator ResumeLatestJob()
+        {
+            restoredJobNeedsResume = false;
+            if (string.IsNullOrWhiteSpace(submissionId) || apiClient == null)
+            {
+                yield break;
+            }
+
+            status = $"Cloud: resuming {Shorten(submissionId, 18)}";
+            StartResultStream();
+            yield return FetchLatestResult("restored job");
+        }
+
+        private IEnumerator FetchLatestResult(string source)
+        {
+            if (resultFetchInFlight || string.IsNullOrWhiteSpace(submissionId) || apiClient == null)
+            {
+                yield break;
+            }
+
+            resultFetchInFlight = true;
+            bool found = false;
+            ResultDocumentDto fetchedResult = null;
+            yield return apiClient.GetResult(
+                submissionId,
+                result =>
+                {
+                    found = true;
+                    fetchedResult = result;
+                },
+                error =>
+                {
+                    status = $"Cloud: result fetch pending ({source})";
+                    Debug.LogWarning($"Result fetch failed for {submissionId}: {error}");
+                });
+            resultFetchInFlight = false;
+            nextResultPollAt = Time.unscaledTime + ResultPollIntervalSeconds;
+
+            if (!found || fetchedResult == null)
+            {
+                yield break;
+            }
+
+            ApplyResultUpdate(fetchedResult, countStreamEvent: false);
+            status = $"Cloud: fetched {fetchedResult.status}";
+            TryAutoDownloadArtifacts();
+        }
+
+        private void PollLatestResultIfNeeded()
+        {
+            if (string.IsNullOrWhiteSpace(submissionId) ||
+                apiClient == null ||
+                resultFetchInFlight ||
+                IsCompletedResult() ||
+                string.Equals(latestResult?.status, "failed", StringComparison.OrdinalIgnoreCase) ||
+                Time.unscaledTime < nextResultPollAt)
+            {
+                return;
+            }
+
+            StartCoroutine(FetchLatestResult("poll"));
         }
 
         private void StartResultStream()
@@ -504,10 +602,14 @@ namespace EnvForge.Navigation.Cloud
             }
         }
 
-        private void ApplyResultUpdate(ResultDocumentDto result)
+        private void ApplyResultUpdate(ResultDocumentDto result, bool countStreamEvent = true)
         {
             latestResult = result;
-            resultStreamEventCount += 1;
+            if (countStreamEvent)
+            {
+                resultStreamEventCount += 1;
+            }
+
             lastResultStreamStatus = result.status;
             lastResultStreamReceivedAt = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             string resultSubmissionId = string.IsNullOrWhiteSpace(result.submission_id)
@@ -521,6 +623,7 @@ namespace EnvForge.Navigation.Cloud
             {
                 resultStreamState = "closed";
                 resultWebSocketClient?.Stop();
+                TryAutoDownloadArtifacts();
             }
             else
             {
@@ -528,22 +631,62 @@ namespace EnvForge.Navigation.Cloud
             }
         }
 
+        private void TryAutoDownloadArtifacts()
+        {
+            if (autoDownloadStarted || busy || !IsCompletedResult())
+            {
+                return;
+            }
+
+            ResultArtifactsDto artifacts = GetResultArtifacts();
+            if (artifacts == null || (artifacts.replay_bundle == null && artifacts.onnx_model == null))
+            {
+                return;
+            }
+
+            EnvForgeJobRecordDto latestJob = jobHistoryStore?.Latest;
+            if (latestJob != null &&
+                !string.IsNullOrWhiteSpace(latestJob.local_onnx_path) &&
+                !string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path) &&
+                File.Exists(latestJob.local_replay_manifest_path) &&
+                File.Exists(latestJob.local_onnx_path))
+            {
+                return;
+            }
+
+            autoDownloadStarted = true;
+            StartCoroutine(DownloadAvailableArtifacts());
+        }
+
         private IEnumerator DownloadReplay()
         {
             busy = true;
-            status = "Cloud: downloading replay";
-            string localPath = GetLocalReplayPath();
+            status = "Cloud: downloading replay manifest";
+            ArtifactLocationDto replayBundle = GetResultArtifacts().replay_bundle;
+            string manifestPath = GetLocalReplayManifestPath();
+            ReplayBundleManifestDto manifest = null;
             yield return artifactDownloader.DownloadFile(
-                GetResultArtifacts().replay_log,
-                localPath,
+                replayBundle,
+                manifestPath,
                 savedPath =>
                 {
-                    string jsonLines = File.ReadAllText(savedPath);
-                    jobHistoryStore.SetLocalReplayPath(submissionId, savedPath);
-                    LoadReplaySteps(ReplayLogSerializer.FromJsonLines(jsonLines), "Downloaded replay");
-                    status = "Cloud: replay loaded";
+                    string manifestJson = File.ReadAllText(savedPath);
+                    manifest = ScenarioBundleSerializer.FromReplayBundleManifestJson(manifestJson);
                 },
-                error => status = $"Replay download failed: {error}");
+                error =>
+                {
+                    busy = false;
+                    status = $"Replay download failed: {error}";
+                });
+            if (manifest == null)
+            {
+                yield break;
+            }
+
+            ConfigureActiveReplayBundle(replayBundle, manifest, manifestPath);
+            jobHistoryStore.SetLocalReplayManifestPath(submissionId, manifestPath);
+            loadedReplaySummary = $"Replay manifest ready: {manifest.chunks?.Count ?? 0} chunks";
+            status = "Cloud: replay manifest ready";
             busy = false;
         }
 
@@ -559,7 +702,7 @@ namespace EnvForge.Navigation.Cloud
 
             ResultArtifactsDto artifacts = GetResultArtifacts();
             if (artifacts == null ||
-                (artifacts.replay_log == null && artifacts.onnx_model == null))
+                (artifacts.replay_bundle == null && artifacts.onnx_model == null))
             {
                 status = "Cloud: no downloadable artifacts";
                 showTrainingSettings = false;
@@ -567,7 +710,7 @@ namespace EnvForge.Navigation.Cloud
                 yield break;
             }
 
-            if (artifacts.replay_log != null)
+            if (artifacts.replay_bundle != null)
             {
                 yield return DownloadReplay();
             }
@@ -644,7 +787,11 @@ namespace EnvForge.Navigation.Cloud
         {
             string resultStatus = latestResult?.status;
             string hudStatus;
-            if (string.Equals(resultStatus, "completed", StringComparison.OrdinalIgnoreCase))
+            if (busy)
+            {
+                hudStatus = "WORKING";
+            }
+            else if (string.Equals(resultStatus, "completed", StringComparison.OrdinalIgnoreCase))
             {
                 hudStatus = "DONE";
             }
@@ -664,10 +811,6 @@ namespace EnvForge.Navigation.Cloud
             else if (!string.IsNullOrEmpty(submissionId) && resultStreamEventCount == 0)
             {
                 hudStatus = "NO EVENT";
-            }
-            else if (busy)
-            {
-                hudStatus = "WORKING";
             }
             else
             {
@@ -744,10 +887,228 @@ namespace EnvForge.Navigation.Cloud
             return timesteps.ToString(CultureInfo.InvariantCulture);
         }
 
-        private string GetLocalReplayPath()
+        private string GetLocalReplayManifestPath()
         {
             string outputDir = Path.Combine(Application.persistentDataPath, "EnvForge", submissionId ?? "latest", "replay");
-            return Path.Combine(outputDir, "replay.jsonl");
+            return Path.Combine(outputDir, "manifest.json");
+        }
+
+        private void ConfigureActiveReplayBundle(
+            ArtifactLocationDto manifestArtifact,
+            ReplayBundleManifestDto manifest,
+            string manifestPath)
+        {
+            activeReplayManifestArtifact = manifestArtifact;
+            activeReplayManifest = manifest;
+            activeReplayManifestPath = manifestPath;
+            activeReplayChunks.Clear();
+            activeReplayTotalSteps = 0;
+            activeReplayChunkIndex = -1;
+
+            if (manifest?.chunks == null)
+            {
+                return;
+            }
+
+            foreach (ReplayBundleChunkDto chunk in manifest.chunks)
+            {
+                if (chunk == null || string.IsNullOrWhiteSpace(chunk.path))
+                {
+                    continue;
+                }
+
+                activeReplayChunks.Add(chunk);
+                activeReplayTotalSteps += Mathf.Max(0, chunk.step_count);
+            }
+        }
+
+        private IEnumerator LoadReplayChunkAt(int chunkIndex, bool autoPlay, bool startAtEnd)
+        {
+            if (replayChunkLoadInFlight)
+            {
+                yield break;
+            }
+
+            if (chunkIndex < 0 || chunkIndex >= activeReplayChunks.Count)
+            {
+                status = chunkIndex < 0 ? "Replay: first chunk" : "Replay: finished";
+                yield break;
+            }
+
+            replayChunkLoadInFlight = true;
+            busy = true;
+
+            ReplayBundleChunkDto chunk = activeReplayChunks[chunkIndex];
+            string localChunkPath = GetLocalReplayChunkPath(chunk);
+            if (string.IsNullOrEmpty(localChunkPath))
+            {
+                status = "Replay output path is unavailable";
+                FinishReplayChunkLoad();
+                yield break;
+            }
+
+            string localChunkDir = Path.GetDirectoryName(localChunkPath);
+            if (!string.IsNullOrEmpty(localChunkDir))
+            {
+                Directory.CreateDirectory(localChunkDir);
+            }
+
+            if (!File.Exists(localChunkPath))
+            {
+                if (activeReplayManifestArtifact == null)
+                {
+                    status = "Replay artifact metadata missing";
+                    FinishReplayChunkLoad();
+                    yield break;
+                }
+
+                ArtifactLocationDto chunkArtifact = BuildReplayChunkArtifact(activeReplayManifestArtifact, chunk.path, chunk.format);
+                bool failed = false;
+                status = $"Cloud: downloading replay {FormatReplayChunkLabel(chunk)}";
+                yield return artifactDownloader.DownloadFile(
+                    chunkArtifact,
+                    localChunkPath,
+                    _ => { },
+                    error =>
+                    {
+                        failed = true;
+                        status = $"Replay chunk download failed: {error}";
+                    });
+
+                if (failed)
+                {
+                    FinishReplayChunkLoad();
+                    yield break;
+                }
+            }
+
+            List<ReplayLogStepDto> chunkSteps = new();
+            foreach (string line in ReadReplayChunkLines(localChunkPath))
+            {
+                chunkSteps.Add(ReplayLogSerializer.FromReplayLogStepJson(line));
+            }
+
+            List<ReplayLogStepDto> displaySteps = BuildReplayDisplaySteps(chunkSteps);
+            EnvForgeJobRecordDto job = jobHistoryStore.SetLocalReplayBundlePaths(submissionId, activeReplayManifestPath, localChunkPath);
+            activeReplayScenarioSource = ApplyReplayScenario(job);
+            replayPlayer.LoadWindow(
+                displaySteps,
+                chunkIndex,
+                activeReplayChunks.Count,
+                0,
+                displaySteps.Count,
+                $"{FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
+                autoPlay,
+                startAtEnd);
+            activeReplayChunkIndex = chunkIndex;
+            loadedReplaySummary = FormatReplaySummary(displaySteps, $"Replay {FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}", activeReplayScenarioSource);
+            status = $"Cloud: replay {FormatReplayChunkLabel(chunk)} loaded";
+            FinishReplayChunkLoad();
+        }
+
+        private void FinishReplayChunkLoad()
+        {
+            replayChunkLoadInFlight = false;
+            busy = false;
+        }
+
+        private string GetLocalReplayChunkPath(ReplayBundleChunkDto chunk)
+        {
+            string manifestPath = activeReplayManifestPath;
+            if (string.IsNullOrWhiteSpace(manifestPath))
+            {
+                manifestPath = GetLocalReplayManifestPath();
+            }
+
+            string outputDir = Path.GetDirectoryName(manifestPath);
+            return string.IsNullOrEmpty(outputDir)
+                ? string.Empty
+                : Path.Combine(outputDir, chunk.path.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        private int GetReplayChunkGlobalStartStepIndex(int chunkIndex)
+        {
+            int start = 0;
+            for (int i = 0; i < chunkIndex && i < activeReplayChunks.Count; i++)
+            {
+                start += Mathf.Max(0, activeReplayChunks[i].step_count);
+            }
+
+            return start;
+        }
+
+        private void HandleReplayWindowBoundaryRequested(int direction, bool autoPlay)
+        {
+            if (replayChunkLoadInFlight || activeReplayChunks.Count == 0)
+            {
+                return;
+            }
+
+            int nextIndex = activeReplayChunkIndex + Math.Sign(direction);
+            if (nextIndex < 0)
+            {
+                status = "Replay: first chunk";
+                return;
+            }
+
+            if (nextIndex >= activeReplayChunks.Count)
+            {
+                status = "Replay: finished";
+                return;
+            }
+
+            StartCoroutine(LoadReplayChunkAt(nextIndex, autoPlay, direction < 0));
+        }
+
+        private static string FormatReplayChunkLabel(ReplayBundleChunkDto chunk)
+        {
+            if (chunk == null)
+            {
+                return "chunk";
+            }
+
+            string phase = string.IsNullOrWhiteSpace(chunk.phase) ? "replay" : chunk.phase;
+            return $"{phase} {FormatSteps(chunk.checkpoint_step)}";
+        }
+
+        private static ArtifactLocationDto BuildReplayChunkArtifact(
+            ArtifactLocationDto manifestArtifact,
+            string chunkPath,
+            string format)
+        {
+            string basePath = manifestArtifact.path;
+            int slashIndex = basePath.LastIndexOf('/');
+            string replayRoot = slashIndex >= 0 ? basePath[..slashIndex] : string.Empty;
+            string objectPath = string.IsNullOrWhiteSpace(replayRoot)
+                ? chunkPath
+                : $"{replayRoot}/{chunkPath}";
+
+            return new ArtifactLocationDto
+            {
+                storage = manifestArtifact.storage,
+                bucket = manifestArtifact.bucket,
+                path = objectPath,
+                format = string.IsNullOrWhiteSpace(format) ? "jsonl.gz" : format,
+            };
+        }
+
+        private static IEnumerable<string> ReadReplayChunkLines(string path)
+        {
+            using (Stream source = File.OpenRead(path))
+            {
+                using Stream readable = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
+                    ? new GZipStream(source, CompressionMode.Decompress)
+                    : source;
+                using StreamReader reader = new(readable);
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        yield return line;
+                    }
+                }
+            }
         }
 
         private IEnumerator DownloadArtifactFile(ArtifactLocationDto artifact, string localPath, Action<string> onSaved = null)
@@ -787,7 +1148,7 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Space(8f);
             GUILayout.Label("Loaded Replay", labelStyle);
             GUILayout.Label(loadedReplaySummary ?? "Replay: none", detailStyle);
-            GUILayout.Label($"Artifacts: replay {FormatArtifactState(GetResultArtifacts()?.replay_log)} · model {FormatModelArtifactState(GetResultArtifacts())}", detailStyle);
+            GUILayout.Label($"Artifacts: replay {FormatArtifactState(GetResultArtifacts()?.replay_bundle)} · model {FormatModelArtifactState(GetResultArtifacts())}", detailStyle);
             GUILayout.Label(FormatHistorySummary(), detailStyle);
             GUILayout.Label(FormatInferenceSummary(), detailStyle);
             if (!string.IsNullOrWhiteSpace(inferenceController?.LastObservationSummary))
@@ -839,7 +1200,7 @@ namespace EnvForge.Navigation.Cloud
             }
 
             EnvForgeJobRecordDto latestJob = jobHistoryStore.Latest;
-            string replay = string.IsNullOrWhiteSpace(latestJob.local_replay_path) ? "replay -" : "replay saved";
+            string replay = string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path) ? "replay -" : "replay manifest";
             string model = string.IsNullOrWhiteSpace(latestJob.local_onnx_path)
                 ? "model -"
                 : "model saved";
@@ -1131,24 +1492,43 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            LoadReplaySteps(ReplayLogSerializer.FromJsonLines(replayAsset.text), "Bundled demo replay");
+            sceneBuilder?.ResetToDefaultScenario();
+            LoadReplaySteps(ReplayLogSerializer.FromJsonLines(replayAsset.text), "Bundled demo replay", "default scenario");
             status = "Cloud: demo replay loaded";
         }
 
-        private void LoadLatestReplay()
+        private IEnumerator LoadLatestReplay()
         {
-            string replayPath = GetLatestLocalReplayPath();
-            if (string.IsNullOrWhiteSpace(replayPath))
+            EnvForgeJobRecordDto latestJob = GetLatestLocalReplayJob();
+            ArtifactLocationDto replayBundle = GetResultArtifacts()?.replay_bundle;
+            if (replayBundle == null && !string.IsNullOrWhiteSpace(submissionId))
             {
-                LoadBundledReplay();
-                return;
+                yield return FetchLatestResult("replay");
+                replayBundle = GetResultArtifacts()?.replay_bundle;
             }
 
+            string manifestPath = latestJob?.local_replay_manifest_path;
+            if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
+            {
+                if (replayBundle == null || !IsCompletedResult())
+                {
+                    LoadBundledReplay();
+                    yield break;
+                }
+
+                yield return DownloadReplay();
+                latestJob = GetLatestLocalReplayJob();
+                manifestPath = latestJob?.local_replay_manifest_path;
+            }
+
+            bool manifestReady = false;
             try
             {
-                string jsonLines = File.ReadAllText(replayPath);
-                LoadReplaySteps(ReplayLogSerializer.FromJsonLines(jsonLines), "Latest downloaded replay");
-                status = "Cloud: latest replay loaded";
+                string manifestJson = File.ReadAllText(manifestPath);
+                ReplayBundleManifestDto manifest = ScenarioBundleSerializer.FromReplayBundleManifestJson(manifestJson);
+                ConfigureActiveReplayBundle(replayBundle, manifest, manifestPath);
+                activeReplayScenarioSource = ApplyReplayScenario(latestJob);
+                manifestReady = true;
             }
             catch (Exception ex)
             {
@@ -1156,28 +1536,102 @@ namespace EnvForge.Navigation.Cloud
                 status = "Latest replay load failed; loading demo";
                 LoadBundledReplay();
             }
+
+            if (!manifestReady)
+            {
+                yield break;
+            }
+
+            if (activeReplayChunks.Count == 0)
+            {
+                status = "Replay bundle has no chunks";
+                yield break;
+            }
+
+            yield return LoadReplayChunkAt(0, false, false);
         }
 
-        private string GetLatestLocalReplayPath()
+        private EnvForgeJobRecordDto GetLatestLocalReplayJob()
         {
             EnvForgeJobRecordDto latestJob = jobHistoryStore?.Latest;
             if (latestJob == null ||
-                string.IsNullOrWhiteSpace(latestJob.local_replay_path) ||
-                !File.Exists(latestJob.local_replay_path))
+                string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path) ||
+                !File.Exists(latestJob.local_replay_manifest_path))
             {
-                return string.Empty;
+                return null;
             }
 
-            return latestJob.local_replay_path;
+            return latestJob;
         }
 
-        private void LoadReplaySteps(IReadOnlyList<ReplayLogStepDto> steps, string source)
+        private string ApplyReplayScenario(EnvForgeJobRecordDto job)
+        {
+            if (!string.IsNullOrWhiteSpace(job?.scenario_bundle_json))
+            {
+                try
+                {
+                    ScenarioBundleDto scenario = ScenarioBundleSerializer.FromScenarioBundleJson(job.scenario_bundle_json);
+                    sceneBuilder?.ApplyScenarioBundle(scenario);
+                    return "saved scenario";
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"Replay scenario restore failed: {ex}");
+                }
+            }
+
+            sceneBuilder?.ResetToDefaultScenario();
+            return "default scenario";
+        }
+
+        private void LoadReplaySteps(IReadOnlyList<ReplayLogStepDto> steps, string source, string scenarioSource)
         {
             replayPlayer.LoadSteps(steps);
-            loadedReplaySummary = FormatReplaySummary(steps, source);
+            loadedReplaySummary = FormatReplaySummary(steps, source, scenarioSource);
         }
 
-        private string FormatReplaySummary(IReadOnlyList<ReplayLogStepDto> steps, string source)
+        private static List<ReplayLogStepDto> BuildReplayDisplaySteps(IReadOnlyList<ReplayLogStepDto> rawSteps)
+        {
+            List<ReplayLogStepDto> displaySteps = new();
+            if (rawSteps == null)
+            {
+                return displaySteps;
+            }
+
+            for (int i = 0; i < rawSteps.Count; i++)
+            {
+                ReplayLogStepDto step = rawSteps[i];
+                if (step != null && step.env_index == ReplayDisplayEnvIndex)
+                {
+                    displaySteps.Add(step);
+                }
+            }
+
+            displaySteps.Sort(CompareReplayDisplaySteps);
+            return displaySteps;
+        }
+
+        private static int CompareReplayDisplaySteps(ReplayLogStepDto left, ReplayLogStepDto right)
+        {
+            int episodeComparison = string.Compare(
+                left?.episode_id ?? string.Empty,
+                right?.episode_id ?? string.Empty,
+                StringComparison.Ordinal);
+            if (episodeComparison != 0)
+            {
+                return episodeComparison;
+            }
+
+            int stepComparison = (left?.step_index ?? 0).CompareTo(right?.step_index ?? 0);
+            if (stepComparison != 0)
+            {
+                return stepComparison;
+            }
+
+            return (left?.time_seconds ?? 0f).CompareTo(right?.time_seconds ?? 0f);
+        }
+
+        private string FormatReplaySummary(IReadOnlyList<ReplayLogStepDto> steps, string source, string scenarioSource)
         {
             if (steps == null || steps.Count == 0)
             {
@@ -1187,8 +1641,32 @@ namespace EnvForge.Navigation.Cloud
             ReplayLogStepDto first = steps[0];
             ReplayLogStepDto last = steps[steps.Count - 1];
             string episode = string.IsNullOrWhiteSpace(first.episode_id) ? "episode unknown" : first.episode_id;
+            int episodeCount = CountEpisodeSegments(steps);
+            string scenario = string.IsNullOrWhiteSpace(scenarioSource) ? string.Empty : $" · {scenarioSource}";
             return $"{source}: job {Shorten(first.job_id, 18)} · scenario {first.scenario_id ?? "unknown"} · " +
-                   $"{episode} · {steps.Count} steps · {last.time_seconds:0.0}s";
+                   $"{episodeCount} ep · first {episode} · {steps.Count} steps · {last.time_seconds:0.0}s{scenario}";
+        }
+
+        private static int CountEpisodeSegments(IReadOnlyList<ReplayLogStepDto> steps)
+        {
+            if (steps == null || steps.Count == 0)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            string previousEpisodeId = null;
+            for (int i = 0; i < steps.Count; i++)
+            {
+                string episodeId = string.IsNullOrWhiteSpace(steps[i]?.episode_id) ? "episode_unknown" : steps[i].episode_id;
+                if (i == 0 || episodeId != previousEpisodeId)
+                {
+                    count++;
+                    previousEpisodeId = episodeId;
+                }
+            }
+
+            return count;
         }
 
         private static string FormatScenarioSummary(ScenarioBundleDto scenario)

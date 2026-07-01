@@ -9,6 +9,11 @@ namespace EnvForge.Navigation.Contracts
             return JsonUtility.ToJson(scenarioBundle, prettyPrint);
         }
 
+        public static ScenarioBundleDto FromScenarioBundleJson(string json)
+        {
+            return JsonUtility.FromJson<ScenarioBundleDto>(json);
+        }
+
         public static ResultBundleDto FromResultBundleJson(string json)
         {
             return JsonUtility.FromJson<ResultBundleDto>(json);
@@ -17,6 +22,11 @@ namespace EnvForge.Navigation.Contracts
         public static ResultDocumentDto FromResultDocumentJson(string json)
         {
             return JsonUtility.FromJson<ResultDocumentDto>(json);
+        }
+
+        public static ReplayBundleManifestDto FromReplayBundleManifestJson(string json)
+        {
+            return JsonUtility.FromJson<ReplayBundleManifestDto>(json);
         }
     }
 }

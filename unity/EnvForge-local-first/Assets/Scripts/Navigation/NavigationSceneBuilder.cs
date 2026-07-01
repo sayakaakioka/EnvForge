@@ -9,14 +9,16 @@ namespace EnvForge.Navigation
 {
     public sealed class NavigationSceneBuilder : MonoBehaviour
     {
-        private static readonly Vector3 AgentStartPosition = NavigationScenarioBundleDefaults.AgentStartPosition;
-        private static readonly Quaternion AgentStartRotation = NavigationScenarioBundleDefaults.AgentStartRotation;
-        private static readonly Vector3 GoalStartPosition = NavigationScenarioBundleDefaults.GoalStartPosition;
+        private static readonly Vector3 DefaultAgentStartPosition = NavigationScenarioBundleDefaults.AgentStartPosition;
+        private static readonly Quaternion DefaultAgentStartRotation = NavigationScenarioBundleDefaults.AgentStartRotation;
+        private static readonly Vector3 DefaultGoalStartPosition = NavigationScenarioBundleDefaults.GoalStartPosition;
         private const int SegmentationImageHeight = NavigationScenarioBundleDefaults.SegmentationImageHeight;
         private const int SegmentationImageWidth = NavigationScenarioBundleDefaults.SegmentationImageWidth;
         private const int HiddenFromSegmentationCameraLayer = 2;
         private const int MaxEpisodeSteps = NavigationScenarioBundleDefaults.MaxEpisodeSteps;
         private const string DefaultScenarioId = NavigationScenarioBundleDefaults.ScenarioId;
+        private const float MaxFloorSizeMeters = 300f;
+        private const float DefaultUserWallLengthMeters = 3f;
 
         [SerializeField] private Vector2 floorSize = new(16f, 12f);
         [SerializeField] private float wallHeight = 1.8f;
@@ -44,6 +46,13 @@ namespace EnvForge.Navigation
         private INavigationEpisodeEvents episodeEvents;
         private NavigationEpisodeEventHub episodeEventHub;
         private NavigationGoalObservationProvider policyObservationProvider;
+        private NavigationCameraController cameraController;
+        private Transform agentTransform;
+        private Transform goalTransform;
+        private NavigationLiveController liveController;
+        private Vector3 agentStartPosition = NavigationScenarioBundleDefaults.AgentStartPosition;
+        private Quaternion agentStartRotation = NavigationScenarioBundleDefaults.AgentStartRotation;
+        private Vector3 goalStartPosition = NavigationScenarioBundleDefaults.GoalStartPosition;
         private int nextWallId = 1;
 
         public NavigationTrainingSettings TrainingSettings => trainingSettings;
@@ -58,6 +67,17 @@ namespace EnvForge.Navigation
 
         public int UserWallCount => userWalls.Count;
 
+        public Vector3 AgentStartPosition => agentStartPosition;
+
+        public Vector3 GoalStartPosition => goalStartPosition;
+
+        public string NextCameraViewLabel => cameraController == null ? "Top" : cameraController.NextViewModeLabel;
+
+        public void ToggleCameraView()
+        {
+            cameraController?.ToggleViewMode();
+        }
+
         public ScenarioBundleDto BuildScenarioBundle(string scenarioId = DefaultScenarioId)
         {
             return NavigationScenarioBundleBuilder.Build(CreateScenarioBundleSource(scenarioId));
@@ -66,6 +86,52 @@ namespace EnvForge.Navigation
         public string BuildScenarioBundleJson(string scenarioId = DefaultScenarioId, bool prettyPrint = true)
         {
             return ScenarioBundleSerializer.ToJson(BuildScenarioBundle(scenarioId), prettyPrint);
+        }
+
+        public void ResetToDefaultScenario()
+        {
+            ApplyScenarioBundle(NavigationScenarioBundleBuilder.Build(NavigationScenarioBundleDefaults.CreateSource()));
+        }
+
+        public void ApplyScenarioBundle(ScenarioBundleDto scenario)
+        {
+            if (scenario == null)
+            {
+                ResetToDefaultScenario();
+                return;
+            }
+
+            floorSize = GetScenarioFloorSize(scenario);
+            goalReachRadius = scenario.world?.goal?.radius > 0f
+                ? scenario.world.goal.radius
+                : NavigationScenarioBundleDefaults.CreateSource().GoalReachRadius;
+            ApplyWallDimensionsFromScenario(scenario);
+
+            ClearUserWalls();
+            ApplyFloorState();
+
+            if (scenario.robot?.start_pose != null)
+            {
+                agentStartRotation = Quaternion.Euler(0f, scenario.robot.start_pose.rotation_y_degrees, 0f);
+                SetAgentStartPosition(ToVector2(scenario.robot.start_pose.position));
+            }
+            else
+            {
+                agentStartRotation = DefaultAgentStartRotation;
+                SetAgentStartPosition(new Vector2(DefaultAgentStartPosition.x, DefaultAgentStartPosition.z));
+            }
+
+            if (scenario.world?.goal?.position != null)
+            {
+                SetGoalStartPosition(ToVector2(scenario.world.goal.position));
+            }
+            else
+            {
+                SetGoalStartPosition(new Vector2(DefaultGoalStartPosition.x, DefaultGoalStartPosition.z));
+            }
+
+            ApplyUserWallsFromScenario(scenario);
+            nextWallId = userWalls.Count + 1;
         }
 
         private void Start()
@@ -81,6 +147,8 @@ namespace EnvForge.Navigation
 
             GameObject agent = CreateAgent(agentMaterial, arrowMaterial);
             GameObject goal = CreateGoal(goalMaterial);
+            agentTransform = agent.transform;
+            goalTransform = goal.transform;
             NavigationReplayPlayer replayPlayer = gameObject.AddComponent<NavigationReplayPlayer>();
             replayPlayer.Configure(agent.transform);
             EnvForgeCloudRunPanel cloudRunPanel = gameObject.AddComponent<EnvForgeCloudRunPanel>();
@@ -89,7 +157,7 @@ namespace EnvForge.Navigation
             NavigationMetrics metrics = gameObject.AddComponent<NavigationMetrics>();
             metrics.Configure(agent.transform, goal.transform);
 
-            NavigationLiveController liveController = agent.GetComponent<NavigationLiveController>();
+            liveController = agent.GetComponent<NavigationLiveController>();
             episodeEventHub = gameObject.AddComponent<NavigationEpisodeEventHub>();
             episodeEventHub.Configure(liveController);
             episodeEvents = episodeEventHub;
@@ -128,7 +196,7 @@ namespace EnvForge.Navigation
             GameObject agent = GameObject.CreatePrimitive(PrimitiveType.Capsule);
             agent.name = "Navigation Agent";
             agent.transform.SetParent(transform);
-            agent.transform.SetPositionAndRotation(AgentStartPosition, AgentStartRotation);
+            agent.transform.SetPositionAndRotation(agentStartPosition, agentStartRotation);
             agent.layer = HiddenFromSegmentationCameraLayer;
             agent.GetComponent<Renderer>().sharedMaterial = material;
             CapsuleCollider capsule = agent.GetComponent<CapsuleCollider>();
@@ -198,7 +266,7 @@ namespace EnvForge.Navigation
             GameObject goal = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             goal.name = "Navigation Goal";
             goal.transform.SetParent(transform);
-            goal.transform.position = GoalStartPosition;
+            goal.transform.position = goalStartPosition;
             goal.transform.localScale = Vector3.one;
             goal.layer = HiddenFromSegmentationCameraLayer;
             goal.GetComponent<Renderer>().sharedMaterial = material;
@@ -302,9 +370,13 @@ namespace EnvForge.Navigation
                 return;
             }
 
-            Camera.main.transform.SetPositionAndRotation(
-                new Vector3(0f, 12f, -10f),
-                Quaternion.Euler(55f, 0f, 0f));
+            cameraController = Camera.main.GetComponent<NavigationCameraController>();
+            if (cameraController == null)
+            {
+                cameraController = Camera.main.gameObject.AddComponent<NavigationCameraController>();
+            }
+
+            cameraController.Configure(Camera.main, floorSize);
         }
 
         private Vector2 GetRandomStartHalfExtents()
@@ -318,14 +390,21 @@ namespace EnvForge.Navigation
         {
             Vector2 minimumFloorSize = GetMinimumFloorSize();
             floorSize = new Vector2(
-                Mathf.Clamp(size.x, minimumFloorSize.x, 80f),
-                Mathf.Clamp(size.y, minimumFloorSize.y, 80f));
+                Mathf.Clamp(size.x, minimumFloorSize.x, MaxFloorSizeMeters),
+                Mathf.Clamp(size.y, minimumFloorSize.y, MaxFloorSizeMeters));
+            ApplyFloorState();
+        }
+
+        private void ApplyFloorState()
+        {
             if (floorObject != null)
             {
                 floorObject.transform.localScale = new Vector3(floorSize.x, 0.1f, floorSize.y);
             }
 
             RebuildBoundaryWalls();
+            RefitUserWallsToFloor();
+            cameraController?.FitToFloor(floorSize);
             float observationScale = floorSize.magnitude;
             policyObservationProvider?.Configure(policyObservationProvider.GetComponent<NavigationMetrics>(), observationScale, goalReachRadius);
         }
@@ -333,8 +412,8 @@ namespace EnvForge.Navigation
         private Vector2 GetMinimumFloorSize()
         {
             float safeGoalClearance = wallThickness + goalReachRadius + 0.25f;
-            float halfWidth = Mathf.Max(Mathf.Abs(AgentStartPosition.x), Mathf.Abs(GoalStartPosition.x)) + safeGoalClearance;
-            float halfDepth = Mathf.Max(Mathf.Abs(AgentStartPosition.z), Mathf.Abs(GoalStartPosition.z)) + safeGoalClearance;
+            float halfWidth = Mathf.Max(Mathf.Abs(agentStartPosition.x), Mathf.Abs(goalStartPosition.x)) + safeGoalClearance;
+            float halfDepth = Mathf.Max(Mathf.Abs(agentStartPosition.z), Mathf.Abs(goalStartPosition.z)) + safeGoalClearance;
             return new Vector2(halfWidth * 2f, halfDepth * 2f);
         }
 
@@ -360,13 +439,16 @@ namespace EnvForge.Navigation
             }
         }
 
-        public void AddUserWall(Vector2 center, float length, float thickness, float rotationYDegrees)
+        public int AddDefaultUserWall(Vector2 center)
+        {
+            return AddUserWall(center, DefaultUserWallLengthMeters, wallThickness, 0f);
+        }
+
+        public int AddUserWall(Vector2 center, float length, float thickness, float rotationYDegrees)
         {
             float safeLength = Mathf.Clamp(length, 0.25f, Mathf.Max(floorSize.x, floorSize.y));
-            float safeThickness = Mathf.Clamp(thickness, 0.1f, 2f);
-            Vector2 clampedCenter = new(
-                Mathf.Clamp(center.x, floorSize.x * -0.5f, floorSize.x * 0.5f),
-                Mathf.Clamp(center.y, floorSize.y * -0.5f, floorSize.y * 0.5f));
+            float safeThickness = Mathf.Clamp(thickness, 0.1f, 4f);
+            Vector2 clampedCenter = ClampUserWallCenter(center, safeLength, safeThickness, rotationYDegrees);
             string id = $"user_wall_{nextWallId:000}";
             nextWallId++;
             NavigationScenarioWallSpec wallSpec = new(
@@ -377,6 +459,124 @@ namespace EnvForge.Navigation
                 rotationYDegrees);
             userWalls.Add(wallSpec);
             CreateWall(wallSpec, blockedRuntimeMaterial, episodeEvents, trackUserWall: true);
+            return userWalls.Count - 1;
+        }
+
+        public bool TryGetUserWall(int index, out NavigationScenarioWallSpec wallSpec)
+        {
+            if (index < 0 || index >= userWalls.Count)
+            {
+                wallSpec = default;
+                return false;
+            }
+
+            wallSpec = userWalls[index];
+            return true;
+        }
+
+        public bool TryRaycastUserWall(Ray ray, out int wallIndex)
+        {
+            wallIndex = -1;
+            float bestDistance = float.PositiveInfinity;
+            for (int i = 0; i < wallObjects.Count; i++)
+            {
+                GameObject wallObject = wallObjects[i];
+                if (wallObject == null || !wallObject.TryGetComponent(out Collider collider))
+                {
+                    continue;
+                }
+
+                if (!collider.Raycast(ray, out RaycastHit hit, 1000f) || hit.distance >= bestDistance)
+                {
+                    continue;
+                }
+
+                bestDistance = hit.distance;
+                wallIndex = i;
+            }
+
+            return wallIndex >= 0;
+        }
+
+        public void UpdateUserWall(int index, Vector2 center, float length, float rotationYDegrees)
+        {
+            if (index < 0 || index >= userWalls.Count)
+            {
+                return;
+            }
+
+            NavigationScenarioWallSpec previous = userWalls[index];
+            float safeLength = Mathf.Clamp(length, 0.25f, Mathf.Max(floorSize.x, floorSize.y));
+            Vector2 clampedCenter = ClampUserWallCenter(center, safeLength, wallThickness, rotationYDegrees);
+            NavigationScenarioWallSpec updated = new(
+                previous.Id,
+                previous.DisplayName,
+                new Vector3(clampedCenter.x, wallHeight * 0.5f, clampedCenter.y),
+                new Vector3(safeLength, wallHeight, wallThickness),
+                rotationYDegrees);
+            userWalls[index] = updated;
+
+            if (index >= wallObjects.Count || wallObjects[index] == null)
+            {
+                RebuildUserWalls();
+                return;
+            }
+
+            ApplyWallSpec(wallObjects[index], updated);
+        }
+
+        private Vector2 ClampUserWallCenter(Vector2 center, float length, float thickness, float rotationYDegrees)
+        {
+            float radians = -rotationYDegrees * Mathf.Deg2Rad;
+            Vector2 axis = new(Mathf.Cos(radians), Mathf.Sin(radians));
+            Vector2 normal = new(-axis.y, axis.x);
+            float halfWidth = floorSize.x * 0.5f;
+            float halfDepth = floorSize.y * 0.5f;
+            float wallHalfWidth = Mathf.Abs(axis.x) * length * 0.5f + Mathf.Abs(normal.x) * thickness * 0.5f;
+            float wallHalfDepth = Mathf.Abs(axis.y) * length * 0.5f + Mathf.Abs(normal.y) * thickness * 0.5f;
+            float boundaryClearance = wallThickness + 0.05f;
+            float maxX = Mathf.Max(0f, halfWidth - boundaryClearance - wallHalfWidth);
+            float maxZ = Mathf.Max(0f, halfDepth - boundaryClearance - wallHalfDepth);
+            return new Vector2(
+                Mathf.Clamp(center.x, -maxX, maxX),
+                Mathf.Clamp(center.y, -maxZ, maxZ));
+        }
+
+        public void SetAgentStartPosition(Vector2 center)
+        {
+            Vector2 clampedCenter = ClampPointInsideBoundary(center, 0.6f);
+            agentStartPosition = new Vector3(clampedCenter.x, DefaultAgentStartPosition.y, clampedCenter.y);
+            if (agentTransform != null)
+            {
+                if (liveController != null)
+                {
+                    liveController.SetResetPose(agentStartPosition, agentStartRotation);
+                }
+                else
+                {
+                    agentTransform.SetPositionAndRotation(agentStartPosition, agentStartRotation);
+                }
+            }
+        }
+
+        public void SetGoalStartPosition(Vector2 center)
+        {
+            Vector2 clampedCenter = ClampPointInsideBoundary(center, goalReachRadius);
+            goalStartPosition = new Vector3(clampedCenter.x, DefaultGoalStartPosition.y, clampedCenter.y);
+            if (goalTransform != null)
+            {
+                goalTransform.position = goalStartPosition;
+            }
+        }
+
+        private Vector2 ClampPointInsideBoundary(Vector2 center, float clearance)
+        {
+            float safeClearance = wallThickness + Mathf.Max(0f, clearance) + 0.05f;
+            float maxX = Mathf.Max(0f, floorSize.x * 0.5f - safeClearance);
+            float maxZ = Mathf.Max(0f, floorSize.y * 0.5f - safeClearance);
+            return new Vector2(
+                Mathf.Clamp(center.x, -maxX, maxX),
+                Mathf.Clamp(center.y, -maxZ, maxZ));
         }
 
         public void RemoveLastUserWall()
@@ -413,9 +613,140 @@ namespace EnvForge.Navigation
             wallObjects.Clear();
         }
 
+        private void RebuildUserWalls()
+        {
+            foreach (GameObject wallObject in wallObjects)
+            {
+                if (wallObject != null)
+                {
+                    Destroy(wallObject);
+                }
+            }
+
+            wallObjects.Clear();
+            if (blockedRuntimeMaterial == null || episodeEvents == null)
+            {
+                return;
+            }
+
+            foreach (NavigationScenarioWallSpec wallSpec in userWalls)
+            {
+                CreateWall(wallSpec, blockedRuntimeMaterial, episodeEvents, trackUserWall: true);
+            }
+        }
+
+        private void RefitUserWallsToFloor()
+        {
+            for (int i = 0; i < userWalls.Count; i++)
+            {
+                NavigationScenarioWallSpec wallSpec = userWalls[i];
+                Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
+                Vector2 clampedCenter = ClampUserWallCenter(center, wallSpec.Size.x, wallSpec.Size.z, wallSpec.RotationYDegrees);
+                userWalls[i] = new NavigationScenarioWallSpec(
+                    wallSpec.Id,
+                    wallSpec.DisplayName,
+                    new Vector3(clampedCenter.x, wallSpec.Center.y, clampedCenter.y),
+                    wallSpec.Size,
+                    wallSpec.RotationYDegrees);
+            }
+
+            RebuildUserWalls();
+        }
+
+        private static void ApplyWallSpec(GameObject wallObject, NavigationScenarioWallSpec wallSpec)
+        {
+            wallObject.name = wallSpec.DisplayName;
+            wallObject.transform.SetPositionAndRotation(wallSpec.Center, Quaternion.Euler(0f, -wallSpec.RotationYDegrees, 0f));
+            wallObject.transform.localScale = wallSpec.Size;
+        }
+
         public IReadOnlyList<NavigationScenarioWallSpec> GetUserWalls()
         {
             return userWalls;
+        }
+
+        private void ApplyUserWallsFromScenario(ScenarioBundleDto scenario)
+        {
+            if (scenario.world?.static_walls == null)
+            {
+                return;
+            }
+
+            foreach (StaticWallDto wall in scenario.world.static_walls)
+            {
+                if (IsBoundaryWall(wall))
+                {
+                    continue;
+                }
+
+                NavigationScenarioWallSpec wallSpec = new(
+                    string.IsNullOrWhiteSpace(wall.id) ? $"user_wall_{userWalls.Count + 1:000}" : wall.id,
+                    $"Navigation User Wall {userWalls.Count + 1}",
+                    new Vector3(wall.center?.x ?? 0f, wall.height * 0.5f, wall.center?.z ?? 0f),
+                    new Vector3(Mathf.Max(0.25f, wall.size?.x ?? DefaultUserWallLengthMeters), Mathf.Max(0.1f, wall.height), Mathf.Max(0.1f, wall.size?.z ?? wallThickness)),
+                    wall.rotation_y_degrees);
+                userWalls.Add(wallSpec);
+                CreateWall(wallSpec, blockedRuntimeMaterial, episodeEvents, trackUserWall: true);
+            }
+        }
+
+        private void ApplyWallDimensionsFromScenario(ScenarioBundleDto scenario)
+        {
+            if (scenario.world?.static_walls == null)
+            {
+                return;
+            }
+
+            foreach (StaticWallDto wall in scenario.world.static_walls)
+            {
+                if (!IsBoundaryWall(wall))
+                {
+                    continue;
+                }
+
+                if (wall.height > 0f)
+                {
+                    wallHeight = wall.height;
+                }
+
+                if (wall.size != null)
+                {
+                    float candidateThickness = Mathf.Min(Mathf.Abs(wall.size.x), Mathf.Abs(wall.size.z));
+                    if (candidateThickness > 0f)
+                    {
+                        wallThickness = candidateThickness;
+                    }
+                }
+
+                return;
+            }
+        }
+
+        private static bool IsBoundaryWall(StaticWallDto wall)
+        {
+            return wall != null &&
+                (wall.id == "wall_north" ||
+                 wall.id == "wall_south" ||
+                 wall.id == "wall_east" ||
+                 wall.id == "wall_west");
+        }
+
+        private static Vector2 GetScenarioFloorSize(ScenarioBundleDto scenario)
+        {
+            Bounds2DDto bounds = scenario.world?.bounds;
+            if (bounds?.min == null || bounds.max == null)
+            {
+                return NavigationScenarioBundleDefaults.FloorSize;
+            }
+
+            return new Vector2(
+                Mathf.Clamp(bounds.max.x - bounds.min.x, 1f, MaxFloorSizeMeters),
+                Mathf.Clamp(bounds.max.z - bounds.min.z, 1f, MaxFloorSizeMeters));
+        }
+
+        private static Vector2 ToVector2(Vector2Dto value)
+        {
+            return value == null ? Vector2.zero : new Vector2(value.x, value.z);
         }
 
         private NavigationScenarioBundleSource CreateScenarioBundleSource(string scenarioId)
@@ -426,9 +757,9 @@ namespace EnvForge.Navigation
                 FloorSize = floorSize,
                 WallHeight = wallHeight,
                 WallThickness = wallThickness,
-                AgentStartPosition = AgentStartPosition,
-                AgentStartRotation = AgentStartRotation,
-                GoalStartPosition = GoalStartPosition,
+                AgentStartPosition = agentStartPosition,
+                AgentStartRotation = agentStartRotation,
+                GoalStartPosition = goalStartPosition,
                 GoalReachRadius = goalReachRadius,
                 SegmentationImageWidth = SegmentationImageWidth,
                 SegmentationImageHeight = SegmentationImageHeight,

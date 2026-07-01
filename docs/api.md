@@ -1,7 +1,7 @@
 # API Notes
 
 EnvForge talks to EmbodiedLab through JSON over HTTP. The current contract path is
-Scenario Bundle in, Result Bundle and Replay Log out.
+Scenario Bundle in, Result Bundle and Replay Bundle out.
 
 The actual endpoint URLs are configured in Unity with an `ApiSettings`
 ScriptableObject. Local API settings assets should not be committed while the
@@ -260,11 +260,12 @@ Example completed response:
         "path": "results/submission-123/model/policy.onnx",
         "format": "onnx"
       },
-      "replay_log": {
+      "replay_bundle": {
         "storage": "gcs",
         "bucket": "embodiedlab-models",
-        "path": "results/submission-123/replay/replay.jsonl",
-        "format": "jsonl"
+        "path": "results/submission-123/replay/manifest.json",
+        "format": "json",
+        "schema_version": "replay-bundle.v0"
       }
     },
     "error": null
@@ -273,10 +274,48 @@ Example completed response:
 }
 ```
 
-## Replay Log
+## Replay Bundle
 
-Replay Log is a JSON Lines artifact referenced by
-`result_bundle.artifacts.replay_log`. Each line is one `replay-log.v0` step.
+Replay Bundle is a manifest artifact referenced by
+`result_bundle.artifacts.replay_bundle`. The manifest lists gzip-compressed
+JSON Lines chunks for training and evaluation trajectories.
+
+Manifest shape:
+
+```json
+{
+  "schema_version": "replay-bundle.v0",
+  "job_id": "submission-123",
+  "scenario_id": "navigation_default",
+  "total_timesteps": 1500000,
+  "chunks": [
+    {
+      "phase": "train",
+      "policy_mode": "stochastic",
+      "checkpoint_step": 10000,
+      "start_step": 1,
+      "end_step": 10000,
+      "path": "train/chunk_000000.jsonl.gz",
+      "format": "jsonl.gz",
+      "step_count": 10000
+    },
+    {
+      "phase": "eval",
+      "policy_mode": "deterministic",
+      "checkpoint_step": 1500000,
+      "path": "eval/checkpoint_01500000.jsonl.gz",
+      "format": "jsonl.gz",
+      "step_count": 20000,
+      "episode_count": 20,
+      "success_rate": 0.95,
+      "avg_reward": 82.4,
+      "avg_steps": 118.5
+    }
+  ]
+}
+```
+
+Each JSONL row inside a chunk is one `replay-log.v0` step.
 
 Example line:
 
@@ -285,7 +324,11 @@ Example line:
   "schema_version": "replay-log.v0",
   "scenario_id": "navigation_default",
   "job_id": "submission-123",
-  "episode_id": "episode_0001",
+  "phase": "eval",
+  "checkpoint_step": 1500000,
+  "env_index": 0,
+  "policy_mode": "deterministic",
+  "episode_id": "eval_env_00_episode_000001",
   "step_index": 1,
   "time_seconds": 0.1,
   "robot": {
@@ -330,8 +373,8 @@ Example line:
 }
 ```
 
-EnvForge should replay this structured log locally rather than depending on
-video output. Replay Log v0 intentionally uses arrays of named values instead
+EnvForge should replay these structured chunks locally rather than depending on
+video output. Replay step v0 intentionally uses arrays of named values instead
 of arbitrary JSON objects for action values, reward components, and sensor
 summaries so Unity can parse it with `JsonUtility`.
 
@@ -351,7 +394,7 @@ Expected flow:
 3. Unity connects to the WebSocket URL for the returned `submission_id`.
 4. Server sends `queued`, `starting`, `running`, `completed`, or `failed` result
    JSON.
-5. On `completed`, Unity downloads the model and Replay Log artifacts when
+5. On `completed`, Unity downloads the model and Replay Bundle artifacts when
    available.
 
 If the WebSocket URL is missing or the connection fails, Unity reports the result

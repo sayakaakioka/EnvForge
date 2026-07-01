@@ -21,6 +21,9 @@ namespace EnvForge.Navigation.Replay
         private const float ButtonHeight = 52f;
         private const float ButtonWidth = 70f;
         private const float ButtonGap = 8f;
+        private const float EpisodeButtonWidth = 108f;
+        private const float EpisodeGapSeconds = 0.35f;
+        private const string CameraMountHeightSensorId = "camera_mount_height";
         private const int FontSize = 26;
         private const int TitleFontSize = 30;
         private const int ButtonFontSize = 26;
@@ -30,8 +33,10 @@ namespace EnvForge.Navigation.Replay
         [SerializeField] private bool showOverlay = true;
 
         private readonly List<ReplayLogStepDto> steps = new();
+        private readonly List<int> episodeStartIndices = new();
 
         private Transform replayTarget;
+        private Transform segmentationCameraTransform;
         private Rigidbody targetBody;
         private AgentMotor targetMotor;
         private GUIStyle titleStyle;
@@ -47,13 +52,24 @@ namespace EnvForge.Navigation.Replay
         private Texture2D nextIcon;
         private float replayClock;
         private int currentStepIndex;
+        private int windowStartStepIndex;
+        private int windowTotalStepCount;
+        private int windowIndex;
+        private int windowCount = 1;
+        private string windowLabel = "Replay";
         private bool isPlaying;
         private bool showDetails;
         private string status = "Replay: no log loaded";
 
+        public event Action<int, bool> WindowBoundaryRequested;
+
         public bool HasReplay => steps.Count > 0;
 
         public bool IsPlaying => isPlaying;
+
+        public bool IsAtWindowStart => HasReplay && currentStepIndex <= 0;
+
+        public bool IsAtWindowEnd => HasReplay && currentStepIndex >= steps.Count - 1;
 
         public bool IsExpandedPanelOpen => showOverlay && showDetails;
 
@@ -70,9 +86,24 @@ namespace EnvForge.Navigation.Replay
 
             targetBody = replayTarget.GetComponent<Rigidbody>();
             targetMotor = replayTarget.GetComponent<AgentMotor>();
+            Camera segmentationCamera = replayTarget.GetComponentInChildren<Camera>(true);
+            segmentationCameraTransform = segmentationCamera != null ? segmentationCamera.transform : null;
         }
 
         public void LoadSteps(IReadOnlyList<ReplayLogStepDto> replaySteps)
+        {
+            LoadWindow(replaySteps, 0, 1, 0, replaySteps?.Count ?? 0, "Replay", false);
+        }
+
+        public void LoadWindow(
+            IReadOnlyList<ReplayLogStepDto> replaySteps,
+            int replayWindowIndex,
+            int replayWindowCount,
+            int globalStartStepIndex,
+            int globalTotalStepCount,
+            string label,
+            bool autoPlay,
+            bool startAtEnd = false)
         {
             steps.Clear();
             if (replaySteps != null)
@@ -80,13 +111,19 @@ namespace EnvForge.Navigation.Replay
                 steps.AddRange(replaySteps);
             }
 
-            currentStepIndex = 0;
-            replayClock = 0f;
-            isPlaying = false;
+            RebuildEpisodeIndex();
+            currentStepIndex = startAtEnd && steps.Count > 0 ? steps.Count - 1 : 0;
+            replayClock = steps.Count > 0 ? steps[currentStepIndex].time_seconds : 0f;
+            windowStartStepIndex = Mathf.Max(0, globalStartStepIndex);
+            windowTotalStepCount = Mathf.Max(steps.Count, globalTotalStepCount);
+            windowIndex = Mathf.Max(0, replayWindowIndex);
+            windowCount = Mathf.Max(1, replayWindowCount);
+            windowLabel = string.IsNullOrWhiteSpace(label) ? "Replay" : label;
+            isPlaying = autoPlay && steps.Count > 0;
             DisableLiveControl();
             ApplyCurrentStep();
             status = steps.Count > 0
-                ? $"Replay: loaded {steps.Count} steps"
+                ? $"Replay: loaded {windowLabel}"
                 : "Replay: no log loaded";
         }
 
@@ -100,6 +137,14 @@ namespace EnvForge.Navigation.Replay
             isPlaying = true;
             if (currentStepIndex >= steps.Count - 1)
             {
+                if (windowIndex < windowCount - 1)
+                {
+                    isPlaying = false;
+                    status = "Replay: loading next";
+                    WindowBoundaryRequested?.Invoke(1, true);
+                    return;
+                }
+
                 currentStepIndex = 0;
                 replayClock = 0f;
             }
@@ -152,10 +197,65 @@ namespace EnvForge.Navigation.Replay
 
             isPlaying = false;
             DisableLiveControl();
+            if (currentStepIndex >= steps.Count - 1)
+            {
+                status = "Replay: loading next";
+                WindowBoundaryRequested?.Invoke(1, false);
+                return;
+            }
+
             currentStepIndex = Mathf.Min(currentStepIndex + 1, steps.Count - 1);
             replayClock = steps[currentStepIndex].time_seconds;
             ApplyCurrentStep();
             status = "Replay: stepped";
+        }
+
+        public void StepToNextEpisode()
+        {
+            if (!HasReplay)
+            {
+                return;
+            }
+
+            isPlaying = false;
+            DisableLiveControl();
+            int episodeIndex = GetCurrentEpisodeIndex();
+            if (episodeIndex >= episodeStartIndices.Count - 1)
+            {
+                status = "Replay: loading next";
+                WindowBoundaryRequested?.Invoke(1, false);
+                return;
+            }
+
+            int nextEpisodeIndex = Mathf.Min(episodeIndex + 1, episodeStartIndices.Count - 1);
+            currentStepIndex = episodeStartIndices[nextEpisodeIndex];
+            replayClock = steps[currentStepIndex].time_seconds;
+            ApplyCurrentStep();
+            status = "Replay: episode";
+        }
+
+        public void StepToPreviousEpisode()
+        {
+            if (!HasReplay)
+            {
+                return;
+            }
+
+            isPlaying = false;
+            DisableLiveControl();
+            int episodeIndex = GetCurrentEpisodeIndex();
+            if (episodeIndex <= 0)
+            {
+                status = "Replay: loading previous";
+                WindowBoundaryRequested?.Invoke(-1, true);
+                return;
+            }
+
+            int previousEpisodeIndex = Mathf.Max(episodeIndex - 1, 0);
+            currentStepIndex = episodeStartIndices[previousEpisodeIndex];
+            replayClock = steps[currentStepIndex].time_seconds;
+            ApplyCurrentStep();
+            status = "Replay: episode";
         }
 
         public void StepBackward()
@@ -167,6 +267,13 @@ namespace EnvForge.Navigation.Replay
 
             isPlaying = false;
             DisableLiveControl();
+            if (currentStepIndex <= 0)
+            {
+                status = "Replay: loading previous";
+                WindowBoundaryRequested?.Invoke(-1, true);
+                return;
+            }
+
             currentStepIndex = Mathf.Max(currentStepIndex - 1, 0);
             replayClock = steps[currentStepIndex].time_seconds;
             ApplyCurrentStep();
@@ -193,16 +300,29 @@ namespace EnvForge.Navigation.Replay
 
             replayClock += Time.deltaTime * Mathf.Max(0.01f, playbackSpeed);
             while (currentStepIndex + 1 < steps.Count &&
+                   IsSameEpisode(currentStepIndex, currentStepIndex + 1) &&
                    steps[currentStepIndex + 1].time_seconds <= replayClock)
             {
                 currentStepIndex++;
+            }
+
+            if (currentStepIndex + 1 < steps.Count &&
+                !IsSameEpisode(currentStepIndex, currentStepIndex + 1) &&
+                replayClock >= steps[currentStepIndex].time_seconds + EpisodeGapSeconds)
+            {
+                currentStepIndex++;
+                replayClock = steps[currentStepIndex].time_seconds;
+                ApplyCurrentStep();
+                return;
             }
 
             if (currentStepIndex >= steps.Count - 1)
             {
                 currentStepIndex = steps.Count - 1;
                 isPlaying = false;
-                status = "Replay: finished";
+                status = "Replay: loading next";
+                WindowBoundaryRequested?.Invoke(1, true);
+                return;
             }
 
             ApplyInterpolatedStep();
@@ -324,6 +444,22 @@ namespace EnvForge.Navigation.Replay
                 StepForward();
             }
 
+            buttonLeft += ButtonWidth + ButtonGap;
+            bool wasEnabled = GUI.enabled;
+            GUI.enabled = wasEnabled && CanStepToPreviousEpisode();
+            if (GUI.Button(new Rect(buttonLeft, buttonTop, EpisodeButtonWidth, ButtonHeight), "Prev Ep", buttonStyle))
+            {
+                StepToPreviousEpisode();
+            }
+
+            buttonLeft += EpisodeButtonWidth + ButtonGap;
+            GUI.enabled = wasEnabled && CanStepToNextEpisode();
+            if (GUI.Button(new Rect(buttonLeft, buttonTop, EpisodeButtonWidth, ButtonHeight), "Next Ep", buttonStyle))
+            {
+                StepToNextEpisode();
+            }
+            GUI.enabled = wasEnabled;
+
             float detailTop = buttonTop + ButtonHeight + 12f;
             GUI.Label(new Rect(contentRect.x, detailTop, contentRect.width, 36f), FormatHudStatus(), labelStyle);
             GUI.Label(new Rect(contentRect.x, detailTop + 40f, contentRect.width, contentRect.yMax - detailTop - 40f), FormatCurrentStep(), labelStyle);
@@ -337,7 +473,7 @@ namespace EnvForge.Navigation.Replay
                 return status;
             }
 
-            return $"{status} · step {step.step_index + 1}/{steps.Count} · reward {step.reward?.total:0.###}";
+            return $"{status} · {FormatCompactEpisodeStatus()} · reward {step.reward?.total:0.###}";
         }
 
         private bool IsCloudPanelExpanded()
@@ -399,17 +535,25 @@ namespace EnvForge.Navigation.Replay
             }
 
             ReplayLogStepDto next = steps[currentStepIndex + 1];
+            if (!IsSameEpisode(currentStepIndex, currentStepIndex + 1))
+            {
+                ApplyStep(current);
+                return;
+            }
+
             float duration = Mathf.Max(0.0001f, next.time_seconds - current.time_seconds);
             float t = Mathf.Clamp01((replayClock - current.time_seconds) / duration);
 
             Vector3 position = Vector3.Lerp(ToWorldPosition(current), ToWorldPosition(next), t);
             Quaternion rotation = Quaternion.Slerp(ToWorldRotation(current), ToWorldRotation(next), t);
             ApplyPose(position, rotation);
+            ApplyCameraMountHeight(current);
         }
 
         private void ApplyStep(ReplayLogStepDto step)
         {
             ApplyPose(ToWorldPosition(step), ToWorldRotation(step));
+            ApplyCameraMountHeight(step);
         }
 
         private void ApplyPose(Vector3 position, Quaternion rotation)
@@ -453,6 +597,20 @@ namespace EnvForge.Navigation.Replay
             return new Vector3(step.robot.position.x, y, step.robot.position.z);
         }
 
+        private void ApplyCameraMountHeight(ReplayLogStepDto step)
+        {
+            if (segmentationCameraTransform == null ||
+                replayTarget == null ||
+                !TryGetSensorValue(step, CameraMountHeightSensorId, out float cameraMountHeightMeters))
+            {
+                return;
+            }
+
+            Vector3 localPosition = segmentationCameraTransform.localPosition;
+            localPosition.y = cameraMountHeightMeters - replayTarget.position.y;
+            segmentationCameraTransform.localPosition = localPosition;
+        }
+
         private static Quaternion ToWorldRotation(ReplayLogStepDto step)
         {
             return Quaternion.Euler(0f, step.robot.rotation_y_degrees, 0f);
@@ -468,9 +626,12 @@ namespace EnvForge.Navigation.Replay
 
             string action = FormatNamedValues(step.action?.values);
             string reward = FormatNamedValues(step.reward?.components);
-            return $"step {step.step_index + 1}/{steps.Count}  t={step.time_seconds:0.00}s  job={Shorten(step.job_id, 12)}\n" +
+            string camera = TryGetSensorValue(step, CameraMountHeightSensorId, out float cameraMountHeightMeters)
+                ? $"{cameraMountHeightMeters:0.00}m"
+                : "-";
+            return $"{FormatEpisodeStatus(step)}  t={step.time_seconds:0.00}s  job={Shorten(step.job_id, 12)}\n" +
                    $"reward {step.reward?.total:0.000}  {Shorten(reward, 48)}\n" +
-                   $"action {Shorten(action, 58)}\n" +
+                   $"action {Shorten(action, 44)}  camera {camera}\n" +
                    $"end {step.termination_reason ?? "-"}";
         }
 
@@ -482,7 +643,126 @@ namespace EnvForge.Navigation.Replay
                 return status;
             }
 
-            return $"{status}  {step.step_index + 1}/{steps.Count}  {step.time_seconds:0.0}s";
+            return $"{status}  {FormatEpisodeStatus(step)}  {step.time_seconds:0.0}s";
+        }
+
+        private void RebuildEpisodeIndex()
+        {
+            episodeStartIndices.Clear();
+            string previousEpisodeId = null;
+            for (int i = 0; i < steps.Count; i++)
+            {
+                string episodeId = NormalizeEpisodeId(steps[i]);
+                if (i == 0 || episodeId != previousEpisodeId)
+                {
+                    episodeStartIndices.Add(i);
+                    previousEpisodeId = episodeId;
+                }
+            }
+        }
+
+        private int GetCurrentEpisodeIndex()
+        {
+            if (episodeStartIndices.Count == 0)
+            {
+                return 0;
+            }
+
+            int result = 0;
+            for (int i = 0; i < episodeStartIndices.Count; i++)
+            {
+                if (episodeStartIndices[i] > currentStepIndex)
+                {
+                    break;
+                }
+
+                result = i;
+            }
+
+            return result;
+        }
+
+        private int GetCurrentEpisodeStepCount()
+        {
+            int episodeIndex = GetCurrentEpisodeIndex();
+            if (episodeStartIndices.Count == 0)
+            {
+                return steps.Count;
+            }
+
+            int start = episodeStartIndices[episodeIndex];
+            int end = episodeIndex + 1 < episodeStartIndices.Count
+                ? episodeStartIndices[episodeIndex + 1]
+                : steps.Count;
+            return Mathf.Max(0, end - start);
+        }
+
+        private int GetCurrentEpisodeStepNumber()
+        {
+            int episodeIndex = GetCurrentEpisodeIndex();
+            int start = episodeStartIndices.Count == 0 ? 0 : episodeStartIndices[episodeIndex];
+            return currentStepIndex - start + 1;
+        }
+
+        private bool IsSameEpisode(int firstIndex, int secondIndex)
+        {
+            if (firstIndex < 0 || firstIndex >= steps.Count || secondIndex < 0 || secondIndex >= steps.Count)
+            {
+                return false;
+            }
+
+            return NormalizeEpisodeId(steps[firstIndex]) == NormalizeEpisodeId(steps[secondIndex]);
+        }
+
+        private bool CanStepToPreviousEpisode()
+        {
+            return HasReplay && (GetCurrentEpisodeIndex() > 0 || windowIndex > 0);
+        }
+
+        private bool CanStepToNextEpisode()
+        {
+            return HasReplay && (GetCurrentEpisodeIndex() < episodeStartIndices.Count - 1 || windowIndex < windowCount - 1);
+        }
+
+        private string FormatEpisodeStatus(ReplayLogStepDto step)
+        {
+            int episodeIndex = GetCurrentEpisodeIndex() + 1;
+            int episodeCount = Mathf.Max(1, episodeStartIndices.Count);
+            int globalStep = windowStartStepIndex + currentStepIndex + 1;
+            return $"chunk {windowIndex + 1}/{windowCount} ep {episodeIndex}/{episodeCount} {NormalizeEpisodeId(step)} step {GetCurrentEpisodeStepNumber()}/{GetCurrentEpisodeStepCount()} total {globalStep}/{windowTotalStepCount}";
+        }
+
+        private string FormatCompactEpisodeStatus()
+        {
+            int episodeIndex = GetCurrentEpisodeIndex() + 1;
+            int episodeCount = Mathf.Max(1, episodeStartIndices.Count);
+            return $"chunk {windowIndex + 1}/{windowCount} ep {episodeIndex}/{episodeCount} step {GetCurrentEpisodeStepNumber()}/{GetCurrentEpisodeStepCount()}";
+        }
+
+        private static string NormalizeEpisodeId(ReplayLogStepDto step)
+        {
+            return string.IsNullOrWhiteSpace(step?.episode_id) ? "episode_unknown" : step.episode_id;
+        }
+
+        private static bool TryGetSensorValue(ReplayLogStepDto step, string sensorId, out float value)
+        {
+            value = 0f;
+            if (step?.sensors == null || string.IsNullOrWhiteSpace(sensorId))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < step.sensors.Count; i++)
+            {
+                ReplaySensorSummaryDto sensor = step.sensors[i];
+                if (sensor != null && sensor.id == sensorId)
+                {
+                    value = sensor.value;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static string FormatNamedValues(List<ReplayNamedValueDto> values)

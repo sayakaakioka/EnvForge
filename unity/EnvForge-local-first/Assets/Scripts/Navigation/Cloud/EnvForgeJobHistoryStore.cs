@@ -48,6 +48,9 @@ namespace EnvForge.Navigation.Cloud
             record.trainer_summary = trainerSummary;
             record.training_timesteps = scenario?.training?.timesteps ?? 0;
             record.training_seed = scenario?.training?.seed ?? 0;
+            record.scenario_bundle_json = scenario == null
+                ? string.Empty
+                : ScenarioBundleSerializer.ToJson(scenario, prettyPrint: false);
             Save();
             return record;
         }
@@ -81,10 +84,19 @@ namespace EnvForge.Navigation.Cloud
             return record;
         }
 
-        public EnvForgeJobRecordDto SetLocalReplayPath(string submissionId, string localPath)
+        public EnvForgeJobRecordDto SetLocalReplayBundlePaths(string submissionId, string manifestPath, string replayPath)
         {
             EnvForgeJobRecordDto record = GetOrCreate(submissionId);
-            record.local_replay_path = localPath;
+            record.local_replay_manifest_path = manifestPath;
+            record.local_replay_chunk_path = replayPath;
+            Save();
+            return record;
+        }
+
+        public EnvForgeJobRecordDto SetLocalReplayManifestPath(string submissionId, string manifestPath)
+        {
+            EnvForgeJobRecordDto record = GetOrCreate(submissionId);
+            record.local_replay_manifest_path = manifestPath;
             Save();
             return record;
         }
@@ -166,7 +178,7 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            record.replay_artifact_path = artifacts.replay_log?.path;
+            record.replay_artifact_path = artifacts.replay_bundle?.path;
             record.onnx_artifact_path = artifacts.onnx_model?.path;
         }
 
@@ -192,7 +204,9 @@ namespace EnvForge.Navigation.Cloud
         public int progress_total_steps;
         public string replay_artifact_path;
         public string onnx_artifact_path;
-        public string local_replay_path;
+        public string local_replay_manifest_path;
+        public string local_replay_chunk_path;
         public string local_onnx_path;
+        public string scenario_bundle_json;
     }
 }
