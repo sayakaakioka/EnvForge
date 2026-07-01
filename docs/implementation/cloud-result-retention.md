@@ -38,7 +38,14 @@ artifact として扱う。
 | Cloud Run execution | `embodiedlab-trainer-fch9d` |
 | Submission ID | `274301e2-76f9-4482-9bc7-933147b82320` |
 | Scenario ID | `navigation_default` |
-| Status | `completed` |
+| Status | `completed` / 2026-07-01 保持解除 |
+
+### 保持解除
+
+2026-07-01 に `simple_robot.v1` / `robot.radius` 契約へ移行する方針に変更した。
+この結果は `simple_robot.v0` 相当の点ロボット collision 判定で生成されたため、
+EnvForge / EmbodiedLab の最新仕様確認には使わない。コード修正とデプロイ後、
+Firestore document、GCS prefix、Cloud Run execution は削除対象として扱う。
 
 ### 実行情報
 

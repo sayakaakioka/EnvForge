@@ -26,7 +26,7 @@ namespace EnvForge.Navigation
         [SerializeField] private float goalReachRadius = 1.2f;
         [SerializeField] private bool showSegmentationPreview = true;
         [SerializeField] private Rect segmentationPreviewRect = new(0.74f, 0.02f, 0.24f, 0.18f);
-        [SerializeField] private float agentCollisionRadius = 0.45f;
+        [SerializeField] private float agentCollisionRadius = NavigationScenarioBundleDefaults.RobotRadiusMeters;
         [SerializeField] private Material passableSegmentationMaterial;
         [SerializeField] private Material blockedSegmentationMaterial;
         [SerializeField] private Material agentVisualMaterial;
@@ -65,6 +65,8 @@ namespace EnvForge.Navigation
 
         public float GoalReachRadius => goalReachRadius;
 
+        public float AgentCollisionRadius => agentCollisionRadius;
+
         public int UserWallCount => userWalls.Count;
 
         public Vector3 AgentStartPosition => agentStartPosition;
@@ -76,6 +78,15 @@ namespace EnvForge.Navigation
         public void ToggleCameraView()
         {
             cameraController?.ToggleViewMode();
+        }
+
+        public void SetAgentCollisionRadius(float radius)
+        {
+            agentCollisionRadius = Mathf.Max(0.01f, radius);
+            if (agentTransform != null && agentTransform.TryGetComponent(out CapsuleCollider capsule))
+            {
+                capsule.radius = agentCollisionRadius;
+            }
         }
 
         public ScenarioBundleDto BuildScenarioBundle(string scenarioId = DefaultScenarioId)
@@ -105,6 +116,9 @@ namespace EnvForge.Navigation
             goalReachRadius = scenario.world?.goal?.radius > 0f
                 ? scenario.world.goal.radius
                 : NavigationScenarioBundleDefaults.CreateSource().GoalReachRadius;
+            SetAgentCollisionRadius(scenario.robot != null && scenario.robot.radius > 0f
+                ? scenario.robot.radius
+                : NavigationScenarioBundleDefaults.RobotRadiusMeters);
             ApplyWallDimensionsFromScenario(scenario);
 
             ClearUserWalls();
@@ -761,6 +775,7 @@ namespace EnvForge.Navigation
                 WallThickness = wallThickness,
                 AgentStartPosition = agentStartPosition,
                 AgentStartRotation = agentStartRotation,
+                RobotRadiusMeters = agentCollisionRadius,
                 GoalStartPosition = goalStartPosition,
                 GoalReachRadius = goalReachRadius,
                 SegmentationImageWidth = SegmentationImageWidth,

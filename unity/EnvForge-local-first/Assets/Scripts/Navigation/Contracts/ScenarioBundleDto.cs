@@ -82,6 +82,7 @@ namespace EnvForge.Navigation.Contracts
     public sealed class RobotDto
     {
         public string type;
+        public float radius;
         public Pose2DDto start_pose;
         public ActionSpaceDto action_space;
     }

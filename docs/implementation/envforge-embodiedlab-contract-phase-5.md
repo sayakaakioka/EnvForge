@@ -182,6 +182,11 @@ Phase 5 の完了後、または Phase 5 を仕上げながら進める実装 TO
   平面サイズは World panel で変更でき、境界壁は平面サイズに追従する。
   ユーザーが追加した青い壁は `static_walls` として Scenario Bundle に反映する。
   ロボットの表示色は床、壁、ゴールと判別しやすいマゼンタ系に変更する。
+- `simple_robot.v1` では Scenario Bundle の `robot.radius` をロボットの x/z 平面上の
+  円形 footprint 半径として扱う。EnvForge は Unity の `CapsuleCollider.radius` と
+  Scenario Bundle の `robot.radius` を同じ値から生成し、EmbodiedLab は移動 collision
+  判定で壁・障害物をこの半径ぶん膨張させる。これにより、EnvForge 上で見える接触と
+  EmbodiedLab の collision / failure 判定を同じ契約に揃える。
 - 無人の実モデル確認用に、Unity Player 起動引数から複数エピソード推論評価を
   実行できる入口を追加する。`-envforgeEvaluateModel` で ONNX を指定し、
   `-envforgeEvaluationOutput` に JSON 結果を書き出す。評価中は通常の

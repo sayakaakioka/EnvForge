@@ -106,6 +106,7 @@ namespace EnvForge.Navigation.Cloud
         private string cameraMountHeightText;
         private string cameraMountHeightMinText;
         private string cameraMountHeightMaxText;
+        private string robotRadiusText;
         private string gammaText;
         private string learningRateText;
         private string entCoefText;
@@ -1387,6 +1388,9 @@ namespace EnvForge.Navigation.Cloud
             DrawFloatField("mount height m", ref cameraMountHeightText, value => sceneBuilder.TrainingSettings.CameraMountHeightMeters = value, SettingsColumnLabelWidth);
             DrawFloatField("height min m", ref cameraMountHeightMinText, value => sceneBuilder.TrainingSettings.CameraMountHeightMinMeters = value, SettingsColumnLabelWidth);
             DrawFloatField("height max m", ref cameraMountHeightMaxText, value => sceneBuilder.TrainingSettings.CameraMountHeightMaxMeters = value, SettingsColumnLabelWidth);
+            GUILayout.Space(8f);
+            GUILayout.Label("Robot", settingsLabelStyle);
+            DrawFloatField("robot radius m", ref robotRadiusText, value => sceneBuilder.SetAgentCollisionRadius(value), SettingsColumnLabelWidth);
             GUILayout.EndVertical();
 
             GUILayout.Space(18f);
@@ -1478,6 +1482,7 @@ namespace EnvForge.Navigation.Cloud
             cameraMountHeightText = settings.CameraMountHeightMeters.ToString("0.######", CultureInfo.InvariantCulture);
             cameraMountHeightMinText = settings.CameraMountHeightMinMeters.ToString("0.######", CultureInfo.InvariantCulture);
             cameraMountHeightMaxText = settings.CameraMountHeightMaxMeters.ToString("0.######", CultureInfo.InvariantCulture);
+            robotRadiusText = sceneBuilder.AgentCollisionRadius.ToString("0.######", CultureInfo.InvariantCulture);
             gammaText = settings.Gamma.ToString("0.####", CultureInfo.InvariantCulture);
             learningRateText = settings.LearningRate.ToString("0.######", CultureInfo.InvariantCulture);
             entCoefText = settings.EntCoef.ToString("0.######", CultureInfo.InvariantCulture);

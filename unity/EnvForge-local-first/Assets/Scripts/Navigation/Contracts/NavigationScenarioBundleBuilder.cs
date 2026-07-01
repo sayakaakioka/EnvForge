@@ -19,6 +19,8 @@ namespace EnvForge.Navigation.Contracts
 
         public Quaternion AgentStartRotation { get; set; }
 
+        public float RobotRadiusMeters { get; set; } = NavigationScenarioBundleDefaults.RobotRadiusMeters;
+
         public Vector3 GoalStartPosition { get; set; }
 
         public float GoalReachRadius { get; set; }
@@ -110,7 +112,7 @@ namespace EnvForge.Navigation.Contracts
                 compatibility = new CompatibilityDto
                 {
                     envforge_min_version = source.EnvForgeVersion,
-                    robot_version = "simple_robot.v0",
+                    robot_version = "simple_robot.v1",
                     sensor_version = "basic_sensors.v0",
                 },
                 world = new WorldDto
@@ -129,6 +131,7 @@ namespace EnvForge.Navigation.Contracts
                 robot = new RobotDto
                 {
                     type = "simple_robot",
+                    radius = source.RobotRadiusMeters,
                     start_pose = new Pose2DDto
                     {
                         position = ToVector2Dto(source.AgentStartPosition),
