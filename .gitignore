@@ -7,9 +7,11 @@
 [Oo]bj/
 [Bb]uild/
 [Bb]uilds/
+artifacts/
 [Ll]ogs/
 UserSettings/
 MemoryCaptures/
+unity/EnvForge-local-first/export/
 
 # =========================
 # Unity Cache / Artifacts
@@ -85,22 +87,3 @@ sysinfo.txt
 # Uncomment if you don't want auto-generated meta for IDE files
 # *.csproj.meta
 # *.sln.meta
-
-# =========================
-# Python / misc (if mixed repo)
-# =========================
-
-.venv/
-env/
-__pycache__/
-*.pyc
-
-# =========================
-# Local data (important for your case)
-# =========================
-
-# ML-Agents training outputs
-results/
-
-# ML-Agents generated timer logs
-unity/EnvForge-local-first/Assets/ML-Agents/Timers/

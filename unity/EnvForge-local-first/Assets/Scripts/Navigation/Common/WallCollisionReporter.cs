@@ -5,10 +5,12 @@ namespace EnvForge.Navigation
     public sealed class WallCollisionReporter : MonoBehaviour
     {
         private INavigationEpisodeEvents episodeEvents;
+        private string wallId;
 
-        public void Configure(INavigationEpisodeEvents eventSink)
+        public void Configure(INavigationEpisodeEvents eventSink, string id = "")
         {
             episodeEvents = eventSink;
+            wallId = id;
         }
 
         private void OnCollisionEnter(Collision collision)
@@ -20,7 +22,7 @@ namespace EnvForge.Navigation
 
             if (collision.rigidbody != null && collision.rigidbody.GetComponent<AgentMotor>() != null)
             {
-                episodeEvents.ReportWallCollision();
+                episodeEvents.ReportWallCollision(wallId);
             }
         }
     }

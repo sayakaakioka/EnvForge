@@ -1,0 +1,136 @@
+# サブエージェント運用
+
+## 目的
+
+EnvForge の開発規模が大きくなったときに、親エージェントが方針と統合を
+担当し、サブエージェントを短命の専門タスクに使うための運用ルールを まとめる。
+
+サブエージェントは常駐チームではなく、必要な局面で起動する補助役として
+扱う。最終判断、統合、ユーザへの確認、commit や push の判断は親エージェントが
+担当する。
+
+## 親エージェントの責務
+
+- Google Drive の `codex/AGENTS.md` とこのリポジトリの `AGENTS.md` を確認する。
+  - `docs/vision` と `docs/implementation` の現在方針を読む。 -
+  作業を分解し、サブエージェントに渡す範囲を決める。 -
+  重要判断はユーザに確認する。 -
+  サブエージェントの結果を統合し、矛盾や重複を解消する。 -
+  最終的な実装、検証、ドキュメント更新、commit 候補を管理する。
+
+## 役割
+
+### EnvForge Context Scout
+
+使うタイミング:
+
+- Phase 開始時。 - Unity、UI、ONNX Runtime、Replay、docs の現状を整理したいとき。 -
+  EmbodiedLab との接続点を確認したいとき。
+
+読む範囲:
+
+- `docs/vision` - `docs/implementation` - `unity/EnvForge-local-first/Assets` -
+  `unity/EnvForge-local-first/Packages` - 関連する Scenario / Result / Replay
+  artifact
+
+出力:
+
+- 現状 - 変更候補 - リスク - 未確認事項
+
+### Implementation Worker
+
+使うタイミング:
+
+- 方針が決まっていて、編集範囲が明確なとき。 - 他の worker
+  と書き込み範囲が重ならないとき。
+
+指示に含めるもの:
+
+- 担当ファイルまたは担当モジュール。 - 触ってよい範囲。 - 触ってはいけない範囲。
+  - 期待する検証方法。 - 他の作業者の変更を revert しないこと。
+
+出力:
+
+- 変更ファイル - 実装内容 - 検証結果 - 残件
+
+### Review Scout
+
+使うタイミング:
+
+- 実装後。 - PR 前。 - Unity UI や replay 表示の破綻がありそうなとき。
+
+見る観点:
+
+- 仕様とのズレ。 - Unity scene、Prefab、ScriptableObject、package 設定の不整合。
+  - UI の重なり、操作不能、表示崩れ。 - ONNX Runtime の入出力 shape や
+  action mapping。 - Replay Bundle 契約との食い違い。 - テスト不足。 -
+  ドキュメントと実装の食い違い。
+
+出力:
+
+- severity 順の finding - test gap - residual risk
+
+### Security Scout
+
+使うタイミング:
+
+- クラウド連携、認証、アップロード、ダウンロード、外部プロセス実行が絡むとき。 -
+  `.env`、credential、token、GCS、Cloud Run、signed URL を扱うとき。
+
+見る観点:
+
+- secret や `.env` の変更、漏えい、commit 混入。 - ユーザ提供データの扱い。 -
+  任意コード実行につながる経路。 - GCS object の公開範囲。 -
+  ローカルファイルやクラウドリソースの破壊的操作。
+
+出力:
+
+- severity 順の finding - 悪用シナリオ - 推奨修正 - 保留できるリスク
+
+### Refactor/Docs Worker
+
+使うタイミング:
+
+- 機能実装と検証が一段落したあと。 - PR 前に構造やドキュメントを整えるとき。
+
+担当:
+
+- 重複整理。 - 命名整理。 - 小さな責務分離。 - docs の追従。 - コメントや README
+  の整理。
+
+## 禁止事項
+
+- 複数 worker に同じファイル群を同時に編集させない。 - サブエージェントに
+  commit、push、PR 作成を任せない。 - サブエージェントに `.env` を変更させない。
+  - reviewer に勝手な修正をさせない。 - explorer に広すぎる調査を渡さない。 -
+  親エージェントがサブエージェント結果を未統合のまま採用しない。
+
+## 起動プロンプト例
+
+### プロンプト例: Context Scout
+
+EnvForge の Context Scout として、現在の `docs/vision`、
+`docs/implementation`、Unity プロジェクトの関連ファイルを読んでください。
+今回のテーマは `<テーマ>` です。出力は「現状」「変更候補」「リスク」
+「未確認事項」に限定してください。ファイルは変更しないでください。
+
+### プロンプト例: Implementation Worker
+
+EnvForge の Implementation Worker として、`<担当範囲>` を実装してください。
+編集してよい範囲は `<ファイルまたはディレクトリ>` です。ほかの作業者の 変更を
+revert しないでください。完了後に、変更ファイル、実装内容、検証結果、
+残件を報告してください。
+
+### プロンプト例: Review Scout
+
+EnvForge の Review Scout として、現在の差分をレビューしてください。 特に Unity
+UI、scene/prefab 設定、ONNX Runtime 入出力、Replay Bundle 契約、
+ユーザ操作の破綻を確認してください。出力は severity 順の finding、 test
+gap、residual risk にしてください。ファイルは変更しないでください。
+
+### プロンプト例: Security Scout
+
+EnvForge の Security Scout として、現在の差分を確認してください。 特に
+`.env`、credential、GCS、Cloud Run、外部プロセス、ユーザ提供データの
+扱いを見てください。出力は severity 順の finding、悪用シナリオ、推奨修正、
+保留できるリスクにしてください。ファイルは変更しないでください。

@@ -5,5 +5,7 @@ namespace EnvForge.Navigation
         void ReportGoalReached();
 
         void ReportWallCollision();
+
+        void ReportWallCollision(string wallId);
     }
 }

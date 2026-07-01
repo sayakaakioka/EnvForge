@@ -4,6 +4,8 @@ namespace EnvForge.Navigation
 {
     public sealed class SegmentationPreviewOverlay : MonoBehaviour
     {
+        private const float Padding = 12f;
+
         private bool showPreview;
         private Camera segmentationCamera;
         private Rect normalizedRect;
@@ -49,13 +51,15 @@ namespace EnvForge.Navigation
                 return;
             }
 
+            float pixelHeight = normalizedRect.height * Screen.height;
+            float pixelWidth = pixelHeight * textureWidth / Mathf.Max(1f, textureHeight);
             Rect pixelRect = new(
-                normalizedRect.x * Screen.width,
-                (1f - normalizedRect.y - normalizedRect.height) * Screen.height,
-                normalizedRect.width * Screen.width,
-                normalizedRect.height * Screen.height);
+                Screen.width - Padding - pixelWidth,
+                Screen.height - Padding - pixelHeight,
+                pixelWidth,
+                pixelHeight);
 
-            GUI.DrawTexture(pixelRect, previewTexture, ScaleMode.ScaleToFit, false);
+            GUI.DrawTexture(pixelRect, previewTexture, ScaleMode.StretchToFill, false);
         }
 
         private void EnsurePreviewTexture()
