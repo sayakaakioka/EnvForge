@@ -15,6 +15,7 @@ namespace EnvForge.Navigation.Contracts
         public const float CameraVerticalFovDegrees = 70f;
         public const float CameraNearClipMeters = 0.05f;
         public const float CameraFarClipMeters = 100f;
+        public const float RobotRadiusMeters = 0.45f;
 
         public static readonly Vector2 FloorSize = new(16f, 12f);
         public static readonly Vector3 AgentStartPosition = new(-6f, 0.6f, -4f);
@@ -31,6 +32,7 @@ namespace EnvForge.Navigation.Contracts
                 WallThickness = 0.35f,
                 AgentStartPosition = AgentStartPosition,
                 AgentStartRotation = AgentStartRotation,
+                RobotRadiusMeters = RobotRadiusMeters,
                 GoalStartPosition = GoalStartPosition,
                 GoalReachRadius = 1.2f,
                 SegmentationImageWidth = SegmentationImageWidth,
