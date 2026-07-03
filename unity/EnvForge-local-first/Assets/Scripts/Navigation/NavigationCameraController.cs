@@ -15,6 +15,7 @@ namespace EnvForge.Navigation
         private const float TopPitchDegrees = 90f;
         private const float MinGroundDistance = 4f;
         private const float MaxGroundDistance = 360f;
+        private const float TopViewCameraHeightPadding = 20f;
 
         [SerializeField] private float dragPanSpeed = 0.025f;
         [SerializeField] private float keyboardPanSpeed = 10f;
@@ -30,6 +31,8 @@ namespace EnvForge.Navigation
         private CameraViewMode viewMode = CameraViewMode.Angled;
 
         public string NextViewModeLabel => viewMode == CameraViewMode.Angled ? "Top" : "Angle";
+
+        public string CurrentViewModeLabel => viewMode == CameraViewMode.Angled ? "Angle" : "Top";
 
         public void Configure(Camera camera, Vector2 floorSize)
         {
@@ -63,6 +66,18 @@ namespace EnvForge.Navigation
         public void ToggleViewMode()
         {
             viewMode = viewMode == CameraViewMode.Angled ? CameraViewMode.Top : CameraViewMode.Angled;
+            ApplyCameraTransform();
+        }
+
+        public void SetTopView()
+        {
+            viewMode = CameraViewMode.Top;
+            ApplyCameraTransform();
+        }
+
+        public void SetAngledView()
+        {
+            viewMode = CameraViewMode.Angled;
             ApplyCameraTransform();
         }
 
@@ -179,14 +194,16 @@ namespace EnvForge.Navigation
 
             if (viewMode == CameraViewMode.Top)
             {
-                float halfFovRadians = controlledCamera.fieldOfView * 0.5f * Mathf.Deg2Rad;
-                float height = Mathf.Max(2f, groundDistance / Mathf.Max(0.1f, Mathf.Tan(halfFovRadians)));
+                controlledCamera.orthographic = true;
+                controlledCamera.orthographicSize = groundDistance;
+                float height = Mathf.Max(TopViewCameraHeightPadding, groundDistance + TopViewCameraHeightPadding);
                 controlledCamera.transform.SetPositionAndRotation(
                     new Vector3(focusPoint.x, height, focusPoint.z),
                     Quaternion.Euler(TopPitchDegrees, 0f, 0f));
                 return;
             }
 
+            controlledCamera.orthographic = false;
             float pitchRadians = AngledPitchDegrees * Mathf.Deg2Rad;
             Vector3 position = new(
                 focusPoint.x,

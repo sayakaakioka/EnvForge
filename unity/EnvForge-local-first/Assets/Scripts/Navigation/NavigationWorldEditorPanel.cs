@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
@@ -21,7 +22,7 @@ namespace EnvForge.Navigation
         private const float CompactWidth = 520f;
         private const float CompactHeight = 112f;
         private const float DetailsWidth = 620f;
-        private const float DetailsHeight = 460f;
+        private const float DetailsHeight = 540f;
         private const float PanelTop = Padding;
         private const float ButtonHeight = 42f;
         private const float FieldHeight = 34f;
@@ -31,7 +32,12 @@ namespace EnvForge.Navigation
         private const float HandleSize = 18f;
         private const float HandlePickRadius = 22f;
         private const float BodyPickRadius = 28f;
+        private const float HandleInsetMeters = 0.35f;
+        private const float OutlineThicknessPixels = 4f;
         private const string TextFieldFocusPrefix = "WorldEditorTextField_";
+        private const string MapDirectoryName = "maps";
+        private const string MapFileName = "latest-map.json";
+        private const string SavedMapScenarioId = "navigation_saved_map";
 
         private NavigationSceneBuilder sceneBuilder;
         private bool showPanel = true;
@@ -43,6 +49,7 @@ namespace EnvForge.Navigation
         private GUIStyle titleStyle;
         private GUIStyle textFieldStyle;
         private GUIStyle boxStyle;
+        private Texture2D wallGuideTexture;
         private NavigationReplayPlayer replayPlayer;
         private Vector2 detailsScroll;
         private Rect lastPanelRect;
@@ -61,6 +68,7 @@ namespace EnvForge.Navigation
         private string startZText = "0";
         private string goalXText = "0";
         private string goalZText = "0";
+        private string mapStatus = "Map: not saved";
 
         public static bool IsPointerEditingWorld { get; private set; }
 
@@ -157,6 +165,7 @@ namespace EnvForge.Navigation
             {
                 sceneBuilder.RemoveLastUserWall();
                 selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
+                mapStatus = "Map: unsaved changes";
             }
 
             if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 3f, buttonTop, buttonWidth, ButtonHeight), sceneBuilder.NextCameraViewLabel, compactButtonStyle))
@@ -198,6 +207,22 @@ namespace EnvForge.Navigation
             }
 
             GUILayout.Space(10f);
+            GUILayout.Label("Map", titleStyle, GUILayout.Height(FieldHeight));
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Save Map", buttonStyle, GUILayout.Height(ButtonHeight)))
+            {
+                SaveMap();
+            }
+
+            if (GUILayout.Button("Load Map", buttonStyle, GUILayout.Height(ButtonHeight)))
+            {
+                LoadMap();
+            }
+
+            GUILayout.EndHorizontal();
+            GUILayout.Label(mapStatus, labelStyle, GUILayout.Height(FieldHeight));
+
+            GUILayout.Space(10f);
             GUILayout.Label("Start / Goal", titleStyle, GUILayout.Height(FieldHeight));
             DrawTextField($"start x 0..{sceneBuilder.FloorSize.x:0.#}", ref startXText);
             DrawTextField($"start z 0..{sceneBuilder.FloorSize.y:0.#}", ref startZText);
@@ -223,6 +248,7 @@ namespace EnvForge.Navigation
             {
                 sceneBuilder.RemoveLastUserWall();
                 selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
+                mapStatus = "Map: unsaved changes";
             }
 
             if (GUILayout.Button("Clear", buttonStyle, GUILayout.Height(ButtonHeight)))
@@ -230,6 +256,7 @@ namespace EnvForge.Navigation
                 sceneBuilder.ClearUserWalls();
                 selectedWallIndex = -1;
                 dragMode = WallDragMode.None;
+                mapStatus = "Map: unsaved changes";
             }
 
             GUILayout.EndHorizontal();
@@ -280,6 +307,7 @@ namespace EnvForge.Navigation
                 SyncTextFromScene();
                 SyncSelectedWallCenterText();
                 ApplyStartGoal();
+                mapStatus = "Map: unsaved changes";
             }
         }
 
@@ -298,6 +326,7 @@ namespace EnvForge.Navigation
             }
 
             SyncStartGoalText();
+            mapStatus = "Map: unsaved changes";
         }
 
         private void AddWallFromFields()
@@ -311,6 +340,7 @@ namespace EnvForge.Navigation
             selectedWallIndex = sceneBuilder.AddDefaultUserWall(UiToWorldWallCenter(new Vector2(x, z)));
             SyncSelectedWallCenterText();
             dragMode = WallDragMode.None;
+            mapStatus = "Map: unsaved changes";
         }
 
         private void HandleWorldMouseEditing()
@@ -407,6 +437,7 @@ namespace EnvForge.Navigation
                 Vector2 nextCenter = dragPoint + dragOffset;
                 sceneBuilder.UpdateUserWall(selectedWallIndex, nextCenter, wallSpec.Size.x, wallSpec.RotationYDegrees);
                 SyncSelectedWallCenterText();
+                mapStatus = "Map: unsaved changes";
                 return;
             }
 
@@ -416,6 +447,7 @@ namespace EnvForge.Navigation
                 float pointerAngle = Mathf.Atan2(dragPoint.y - center.y, dragPoint.x - center.x) * Mathf.Rad2Deg;
                 sceneBuilder.UpdateUserWall(selectedWallIndex, center, wallSpec.Size.x, dragStartRotation + pointerAngle - dragStartPointerAngle);
                 SyncSelectedWallCenterText();
+                mapStatus = "Map: unsaved changes";
                 return;
             }
 
@@ -436,6 +468,7 @@ namespace EnvForge.Navigation
             Vector2 centerAfterResize = fixedResizeEndpoint + axis * (signedLength * 0.5f);
             sceneBuilder.UpdateUserWall(selectedWallIndex, centerAfterResize, Mathf.Abs(signedLength), wallSpec.RotationYDegrees);
             SyncSelectedWallCenterText();
+            mapStatus = "Map: unsaved changes";
         }
 
         private bool TryFindWallHandleHit(Vector2 screenPosition, Camera camera, out int wallIndex, out WallDragMode nextDragMode, out Vector2 fixedEndpoint)
@@ -455,7 +488,9 @@ namespace EnvForge.Navigation
                 Vector2 axis = GetWallAxis(wallSpec.RotationYDegrees);
                 Vector2 negativeEndpoint = center - axis * (wallSpec.Size.x * 0.5f);
                 Vector2 positiveEndpoint = center + axis * (wallSpec.Size.x * 0.5f);
-                if (IsNearScreenPoint(screenPosition, camera, positiveEndpoint))
+                Vector2 negativeHandle = GetResizeHandlePoint(center, axis, wallSpec.Size.x, true);
+                Vector2 positiveHandle = GetResizeHandlePoint(center, axis, wallSpec.Size.x, false);
+                if (IsNearScreenPoint(screenPosition, camera, positiveHandle))
                 {
                     wallIndex = i;
                     nextDragMode = WallDragMode.ResizePositive;
@@ -463,7 +498,7 @@ namespace EnvForge.Navigation
                     return true;
                 }
 
-                if (IsNearScreenPoint(screenPosition, camera, negativeEndpoint))
+                if (IsNearScreenPoint(screenPosition, camera, negativeHandle))
                 {
                     wallIndex = i;
                     nextDragMode = WallDragMode.ResizeNegative;
@@ -607,14 +642,23 @@ namespace EnvForge.Navigation
 
             Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
             Vector2 axis = GetWallAxis(wallSpec.RotationYDegrees);
-            DrawHandle(center - axis * (wallSpec.Size.x * 0.5f), selectedButtonStyle);
-            DrawHandle(center + axis * (wallSpec.Size.x * 0.5f), selectedButtonStyle);
+            DrawWallOutline(center, axis, wallSpec.Size.x, wallSpec.Size.z);
+            DrawHandle(GetResizeHandlePoint(center, axis, wallSpec.Size.x, true), selectedButtonStyle);
+            DrawHandle(GetResizeHandlePoint(center, axis, wallSpec.Size.x, false), selectedButtonStyle);
         }
 
         private static Vector2 GetWallAxis(float rotationYDegrees)
         {
             float radians = -rotationYDegrees * Mathf.Deg2Rad;
             return new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
+        }
+
+        private static Vector2 GetResizeHandlePoint(Vector2 center, Vector2 axis, float wallLength, bool negativeSide)
+        {
+            float halfLength = Mathf.Max(0.125f, wallLength * 0.5f);
+            float inset = Mathf.Min(HandleInsetMeters, Mathf.Max(0f, halfLength - 0.125f));
+            float direction = negativeSide ? -1f : 1f;
+            return center + axis * (direction * Mathf.Max(0f, halfLength - inset));
         }
 
         private static void DrawHandle(Vector2 worldPoint, GUIStyle style)
@@ -627,6 +671,107 @@ namespace EnvForge.Navigation
 
             Rect rect = new(screen.x - HandleSize * 0.5f, Screen.height - screen.y - HandleSize * 0.5f, HandleSize, HandleSize);
             GUI.Box(rect, GUIContent.none, style);
+        }
+
+        private void DrawWallOutline(Vector2 center, Vector2 axis, float wallLength, float wallThickness)
+        {
+            Vector2 normal = new(-axis.y, axis.x);
+            float halfLength = wallLength * 0.5f;
+            float halfThickness = wallThickness * 0.5f;
+            Vector2 a = center - axis * halfLength - normal * halfThickness;
+            Vector2 b = center + axis * halfLength - normal * halfThickness;
+            Vector2 c = center + axis * halfLength + normal * halfThickness;
+            Vector2 d = center - axis * halfLength + normal * halfThickness;
+            DrawGuideLine(a, b);
+            DrawGuideLine(b, c);
+            DrawGuideLine(c, d);
+            DrawGuideLine(d, a);
+        }
+
+        private void DrawGuideLine(Vector2 start, Vector2 end)
+        {
+            if (!TryGetScreenPoint(Camera.main, start, out Vector2 screenStart) ||
+                !TryGetScreenPoint(Camera.main, end, out Vector2 screenEnd))
+            {
+                return;
+            }
+
+            Vector2 guiStart = new(screenStart.x, Screen.height - screenStart.y);
+            Vector2 guiEnd = new(screenEnd.x, Screen.height - screenEnd.y);
+            Vector2 delta = guiEnd - guiStart;
+            float length = delta.magnitude;
+            if (length <= Mathf.Epsilon)
+            {
+                return;
+            }
+
+            Matrix4x4 previousMatrix = GUI.matrix;
+            float angle = Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg;
+            GUIUtility.RotateAroundPivot(angle, guiStart);
+            GUI.DrawTexture(new Rect(guiStart.x, guiStart.y - OutlineThicknessPixels * 0.5f, length, OutlineThicknessPixels), wallGuideTexture);
+            GUI.matrix = previousMatrix;
+        }
+
+        private void SaveMap()
+        {
+            try
+            {
+                string directory = GetMapDirectory();
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(GetMapPath(), sceneBuilder.BuildScenarioBundleJson(SavedMapScenarioId));
+                mapStatus = "Map: saved latest-map.json";
+            }
+            catch (IOException exception)
+            {
+                mapStatus = "Map: save failed";
+                Debug.LogError($"Map save failed: {exception.Message}");
+            }
+            catch (System.UnauthorizedAccessException exception)
+            {
+                mapStatus = "Map: save failed";
+                Debug.LogError($"Map save failed: {exception.Message}");
+            }
+        }
+
+        private void LoadMap()
+        {
+            string path = GetMapPath();
+            if (!File.Exists(path))
+            {
+                mapStatus = "Map: no saved map";
+                return;
+            }
+
+            try
+            {
+                ScenarioBundleDto scenario = ScenarioBundleSerializer.FromScenarioBundleJson(File.ReadAllText(path));
+                sceneBuilder.ApplyScenarioBundle(scenario);
+                selectedWallIndex = sceneBuilder.UserWallCount > 0 ? sceneBuilder.UserWallCount - 1 : -1;
+                dragMode = WallDragMode.None;
+                SyncTextFromScene();
+                SyncSelectedWallCenterText();
+                mapStatus = "Map: loaded latest-map.json";
+            }
+            catch (IOException exception)
+            {
+                mapStatus = "Map: load failed";
+                Debug.LogError($"Map load failed: {exception.Message}");
+            }
+            catch (System.ArgumentException exception)
+            {
+                mapStatus = "Map: load failed";
+                Debug.LogError($"Map load failed: {exception.Message}");
+            }
+        }
+
+        private static string GetMapDirectory()
+        {
+            return Path.Combine(Application.persistentDataPath, "EnvForge", MapDirectoryName);
+        }
+
+        private static string GetMapPath()
+        {
+            return Path.Combine(GetMapDirectory(), MapFileName);
         }
 
         private static bool TryParse(string text, out float value)
@@ -694,6 +839,7 @@ namespace EnvForge.Navigation
 
             boxStyle = new GUIStyle(GUI.skin.box);
             boxStyle.normal.background = CreateTexture(new Color(0f, 0f, 0f, 0.9f));
+            wallGuideTexture = CreateTexture(new Color(1f, 0.72f, 0.12f, 0.85f));
         }
 
         private static Texture2D CreateTexture(Color color)
