@@ -4,6 +4,7 @@ using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Cloud;
 using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
+using UnityEngine.Rendering;
 
 namespace EnvForge.Navigation
 {
@@ -19,6 +20,7 @@ namespace EnvForge.Navigation
         private const string DefaultScenarioId = NavigationScenarioBundleDefaults.ScenarioId;
         private const float MaxFloorSizeMeters = 300f;
         private const float DefaultUserWallLengthMeters = 3f;
+        private const float UserWallPlacementGapMeters = 0.35f;
 
         [SerializeField] private Vector2 floorSize = new(16f, 12f);
         [SerializeField] private float wallHeight = 1.8f;
@@ -75,9 +77,21 @@ namespace EnvForge.Navigation
 
         public string NextCameraViewLabel => cameraController == null ? "Top" : cameraController.NextViewModeLabel;
 
+        public string CurrentCameraViewLabel => cameraController == null ? "Angle" : cameraController.CurrentViewModeLabel;
+
         public void ToggleCameraView()
         {
             cameraController?.ToggleViewMode();
+        }
+
+        public void SetTopCameraView()
+        {
+            cameraController?.SetTopView();
+        }
+
+        public void SetAngledCameraView()
+        {
+            cameraController?.SetAngledView();
         }
 
         public void SetAgentCollisionRadius(float radius)
@@ -300,7 +314,10 @@ namespace EnvForge.Navigation
             wall.transform.SetParent(transform);
             wall.transform.SetPositionAndRotation(wallSpec.Center, Quaternion.Euler(0f, -wallSpec.RotationYDegrees, 0f));
             wall.transform.localScale = wallSpec.Size;
-            wall.GetComponent<Renderer>().sharedMaterial = material;
+            Renderer renderer = wall.GetComponent<Renderer>();
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
 
             WallCollisionReporter reporter = wall.AddComponent<WallCollisionReporter>();
             reporter.Configure(episodeEvents, wallSpec.Id);
@@ -464,7 +481,7 @@ namespace EnvForge.Navigation
         {
             float safeLength = Mathf.Clamp(length, 0.25f, Mathf.Max(floorSize.x, floorSize.y));
             float safeThickness = Mathf.Clamp(thickness, 0.1f, 4f);
-            Vector2 clampedCenter = ClampUserWallCenter(center, safeLength, safeThickness, rotationYDegrees);
+            Vector2 clampedCenter = FindOpenUserWallCenter(center, safeLength, safeThickness, rotationYDegrees);
             string id = $"user_wall_{nextWallId:000}";
             nextWallId++;
             NavigationScenarioWallSpec wallSpec = new(
@@ -550,12 +567,119 @@ namespace EnvForge.Navigation
             float halfDepth = floorSize.y * 0.5f;
             float wallHalfWidth = Mathf.Abs(axis.x) * length * 0.5f + Mathf.Abs(normal.x) * thickness * 0.5f;
             float wallHalfDepth = Mathf.Abs(axis.y) * length * 0.5f + Mathf.Abs(normal.y) * thickness * 0.5f;
-            float boundaryClearance = wallThickness + 0.05f;
+            float boundaryClearance = wallThickness * 0.5f;
             float maxX = Mathf.Max(0f, halfWidth - boundaryClearance - wallHalfWidth);
             float maxZ = Mathf.Max(0f, halfDepth - boundaryClearance - wallHalfDepth);
             return new Vector2(
                 Mathf.Clamp(center.x, -maxX, maxX),
                 Mathf.Clamp(center.y, -maxZ, maxZ));
+        }
+
+        private Vector2 FindOpenUserWallCenter(Vector2 requestedCenter, float length, float thickness, float rotationYDegrees)
+        {
+            Vector2 clampedRequestedCenter = ClampUserWallCenter(requestedCenter, length, thickness, rotationYDegrees);
+            if (!OverlapsExistingUserWall(clampedRequestedCenter, length, thickness, rotationYDegrees))
+            {
+                return clampedRequestedCenter;
+            }
+
+            float stride = Mathf.Max(thickness + UserWallPlacementGapMeters, 0.5f);
+            int maxRing = Mathf.CeilToInt(Mathf.Max(floorSize.x, floorSize.y) / stride);
+            for (int ring = 1; ring <= maxRing; ring++)
+            {
+                for (int x = -ring; x <= ring; x++)
+                {
+                    for (int z = -ring; z <= ring; z++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(x), Mathf.Abs(z)) != ring)
+                        {
+                            continue;
+                        }
+
+                        Vector2 candidate = ClampUserWallCenter(
+                            requestedCenter + new Vector2(x * stride, z * stride),
+                            length,
+                            thickness,
+                            rotationYDegrees);
+                        if (!OverlapsExistingUserWall(candidate, length, thickness, rotationYDegrees))
+                        {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+
+            return clampedRequestedCenter;
+        }
+
+        private bool OverlapsExistingUserWall(Vector2 center, float length, float thickness, float rotationYDegrees)
+        {
+            for (int i = 0; i < userWalls.Count; i++)
+            {
+                NavigationScenarioWallSpec wallSpec = userWalls[i];
+                Vector2 otherCenter = new(wallSpec.Center.x, wallSpec.Center.z);
+                if (OrientedRectsOverlap(
+                    center,
+                    length,
+                    thickness + UserWallPlacementGapMeters,
+                    rotationYDegrees,
+                    otherCenter,
+                    wallSpec.Size.x,
+                    wallSpec.Size.z + UserWallPlacementGapMeters,
+                    wallSpec.RotationYDegrees))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool OrientedRectsOverlap(
+            Vector2 firstCenter,
+            float firstLength,
+            float firstThickness,
+            float firstRotationYDegrees,
+            Vector2 secondCenter,
+            float secondLength,
+            float secondThickness,
+            float secondRotationYDegrees)
+        {
+            Vector2 firstAxis = GetWallAxis(firstRotationYDegrees);
+            Vector2 firstNormal = new(-firstAxis.y, firstAxis.x);
+            Vector2 secondAxis = GetWallAxis(secondRotationYDegrees);
+            Vector2 secondNormal = new(-secondAxis.y, secondAxis.x);
+            return OverlapsOnAxis(firstCenter, firstAxis, firstNormal, firstLength, firstThickness, secondCenter, secondAxis, secondNormal, secondLength, secondThickness, firstAxis) &&
+                   OverlapsOnAxis(firstCenter, firstAxis, firstNormal, firstLength, firstThickness, secondCenter, secondAxis, secondNormal, secondLength, secondThickness, firstNormal) &&
+                   OverlapsOnAxis(firstCenter, firstAxis, firstNormal, firstLength, firstThickness, secondCenter, secondAxis, secondNormal, secondLength, secondThickness, secondAxis) &&
+                   OverlapsOnAxis(firstCenter, firstAxis, firstNormal, firstLength, firstThickness, secondCenter, secondAxis, secondNormal, secondLength, secondThickness, secondNormal);
+        }
+
+        private static bool OverlapsOnAxis(
+            Vector2 firstCenter,
+            Vector2 firstAxis,
+            Vector2 firstNormal,
+            float firstLength,
+            float firstThickness,
+            Vector2 secondCenter,
+            Vector2 secondAxis,
+            Vector2 secondNormal,
+            float secondLength,
+            float secondThickness,
+            Vector2 testAxis)
+        {
+            float distance = Mathf.Abs(Vector2.Dot(secondCenter - firstCenter, testAxis));
+            float firstRadius = Mathf.Abs(Vector2.Dot(firstAxis, testAxis)) * firstLength * 0.5f +
+                Mathf.Abs(Vector2.Dot(firstNormal, testAxis)) * firstThickness * 0.5f;
+            float secondRadius = Mathf.Abs(Vector2.Dot(secondAxis, testAxis)) * secondLength * 0.5f +
+                Mathf.Abs(Vector2.Dot(secondNormal, testAxis)) * secondThickness * 0.5f;
+            return distance <= firstRadius + secondRadius;
+        }
+
+        private static Vector2 GetWallAxis(float rotationYDegrees)
+        {
+            float radians = -rotationYDegrees * Mathf.Deg2Rad;
+            return new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
         }
 
         public void SetAgentStartPosition(Vector2 center)

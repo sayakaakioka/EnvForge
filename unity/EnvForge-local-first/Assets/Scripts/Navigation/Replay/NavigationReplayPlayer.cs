@@ -45,6 +45,7 @@ namespace EnvForge.Navigation.Replay
         private GUIStyle boxStyle;
         private EnvForgeCloudRunPanel cloudRunPanel;
         private NavigationWorldEditorPanel worldEditorPanel;
+        private NavigationSceneBuilder sceneBuilder;
         private Texture2D previousIcon;
         private Texture2D playIcon;
         private Texture2D pauseIcon;
@@ -393,6 +394,19 @@ namespace EnvForge.Navigation.Replay
             }
 
             float detailsLeft = buttonLeft + CompactIconButtonWidth + ButtonGap;
+            float cameraButtonWidth = 74f;
+            if (GUI.Button(new Rect(detailsLeft, buttonTop, cameraButtonWidth, CompactButtonHeight), "Top", buttonStyle))
+            {
+                SetTopCameraView();
+            }
+
+            detailsLeft += cameraButtonWidth + ButtonGap;
+            if (GUI.Button(new Rect(detailsLeft, buttonTop, cameraButtonWidth, CompactButtonHeight), "Angle", buttonStyle))
+            {
+                SetAngledCameraView();
+            }
+
+            detailsLeft += cameraButtonWidth + ButtonGap;
             if (GUI.Button(new Rect(detailsLeft, buttonTop, contentRect.xMax - detailsLeft, CompactButtonHeight), "Details", buttonStyle))
             {
                 showDetails = true;
@@ -408,6 +422,16 @@ namespace EnvForge.Navigation.Replay
 
             Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f);
             GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 36f), "Replay", titleStyle);
+            if (GUI.Button(new Rect(contentRect.xMax - 292f, contentRect.y, 76f, 42f), "Top", buttonStyle))
+            {
+                SetTopCameraView();
+            }
+
+            if (GUI.Button(new Rect(contentRect.xMax - 208f, contentRect.y, 76f, 42f), "Angle", buttonStyle))
+            {
+                SetAngledCameraView();
+            }
+
             if (GUI.Button(new Rect(contentRect.xMax - 128f, contentRect.y, 128f, 42f), "Compact", buttonStyle))
             {
                 showDetails = false;
@@ -494,6 +518,26 @@ namespace EnvForge.Navigation.Replay
             }
 
             return worldEditorPanel != null && worldEditorPanel.IsExpandedPanelOpen;
+        }
+
+        private void SetTopCameraView()
+        {
+            GetSceneBuilder()?.SetTopCameraView();
+        }
+
+        private void SetAngledCameraView()
+        {
+            GetSceneBuilder()?.SetAngledCameraView();
+        }
+
+        private NavigationSceneBuilder GetSceneBuilder()
+        {
+            if (sceneBuilder == null)
+            {
+                sceneBuilder = FindFirstObjectByType<NavigationSceneBuilder>();
+            }
+
+            return sceneBuilder;
         }
 
         private void DisableLiveControl()
