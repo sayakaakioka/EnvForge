@@ -531,16 +531,21 @@ namespace EnvForge.Navigation
             return wallIndex >= 0;
         }
 
-        public void UpdateUserWall(int index, Vector2 center, float length, float rotationYDegrees)
+        public bool UpdateUserWall(int index, Vector2 center, float length, float rotationYDegrees)
         {
             if (index < 0 || index >= userWalls.Count)
             {
-                return;
+                return false;
             }
 
             NavigationScenarioWallSpec previous = userWalls[index];
             float safeLength = Mathf.Clamp(length, 0.25f, Mathf.Max(floorSize.x, floorSize.y));
             Vector2 clampedCenter = ClampUserWallCenter(center, safeLength, wallThickness, rotationYDegrees);
+            if (!CanPlaceUserWall(index, clampedCenter, safeLength, rotationYDegrees))
+            {
+                return false;
+            }
+
             NavigationScenarioWallSpec updated = new(
                 previous.Id,
                 previous.DisplayName,
@@ -552,10 +557,11 @@ namespace EnvForge.Navigation
             if (index >= wallObjects.Count || wallObjects[index] == null)
             {
                 RebuildUserWalls();
-                return;
+                return true;
             }
 
             ApplyWallSpec(wallObjects[index], updated);
+            return true;
         }
 
         private Vector2 ClampUserWallCenter(Vector2 center, float length, float thickness, float rotationYDegrees)
@@ -578,7 +584,7 @@ namespace EnvForge.Navigation
         private Vector2 FindOpenUserWallCenter(Vector2 requestedCenter, float length, float thickness, float rotationYDegrees)
         {
             Vector2 clampedRequestedCenter = ClampUserWallCenter(requestedCenter, length, thickness, rotationYDegrees);
-            if (!OverlapsExistingUserWall(clampedRequestedCenter, length, thickness, rotationYDegrees))
+            if (!OverlapsExistingUserWall(clampedRequestedCenter, length, thickness, rotationYDegrees, -1))
             {
                 return clampedRequestedCenter;
             }
@@ -601,7 +607,7 @@ namespace EnvForge.Navigation
                             length,
                             thickness,
                             rotationYDegrees);
-                        if (!OverlapsExistingUserWall(candidate, length, thickness, rotationYDegrees))
+                        if (!OverlapsExistingUserWall(candidate, length, thickness, rotationYDegrees, -1))
                         {
                             return candidate;
                         }
@@ -612,10 +618,20 @@ namespace EnvForge.Navigation
             return clampedRequestedCenter;
         }
 
-        private bool OverlapsExistingUserWall(Vector2 center, float length, float thickness, float rotationYDegrees)
+        public bool CanPlaceUserWall(int indexToIgnore, Vector2 center, float length, float rotationYDegrees)
+        {
+            return !OverlapsExistingUserWall(center, length, wallThickness, rotationYDegrees, indexToIgnore);
+        }
+
+        private bool OverlapsExistingUserWall(Vector2 center, float length, float thickness, float rotationYDegrees, int indexToIgnore)
         {
             for (int i = 0; i < userWalls.Count; i++)
             {
+                if (i == indexToIgnore)
+                {
+                    continue;
+                }
+
                 NavigationScenarioWallSpec wallSpec = userWalls[i];
                 Vector2 otherCenter = new(wallSpec.Center.x, wallSpec.Center.z);
                 if (OrientedRectsOverlap(
@@ -632,7 +648,42 @@ namespace EnvForge.Navigation
                 }
             }
 
-            return false;
+            Vector3 agentPosition = agentTransform != null ? agentTransform.position : agentStartPosition;
+            if (ContainsProtectedPoint(
+                center,
+                length,
+                thickness,
+                rotationYDegrees,
+                new Vector2(agentPosition.x, agentPosition.z),
+                agentCollisionRadius + UserWallPlacementGapMeters))
+            {
+                return true;
+            }
+
+            return ContainsProtectedPoint(
+                center,
+                length,
+                thickness,
+                rotationYDegrees,
+                new Vector2(goalStartPosition.x, goalStartPosition.z),
+                goalReachRadius + UserWallPlacementGapMeters);
+        }
+
+        private static bool ContainsProtectedPoint(
+            Vector2 wallCenter,
+            float wallLength,
+            float wallThickness,
+            float wallRotationYDegrees,
+            Vector2 point,
+            float clearance)
+        {
+            Vector2 axis = GetWallAxis(wallRotationYDegrees);
+            Vector2 normal = new(-axis.y, axis.x);
+            Vector2 delta = point - wallCenter;
+            float localLength = Mathf.Abs(Vector2.Dot(delta, axis));
+            float localThickness = Mathf.Abs(Vector2.Dot(delta, normal));
+            return localLength <= wallLength * 0.5f + clearance &&
+                localThickness <= wallThickness * 0.5f + clearance;
         }
 
         private static bool OrientedRectsOverlap(
@@ -737,6 +788,27 @@ namespace EnvForge.Navigation
             {
                 wallObjects.RemoveAt(index);
             }
+        }
+
+        public bool RemoveUserWall(int index)
+        {
+            if (index < 0 || index >= userWalls.Count)
+            {
+                return false;
+            }
+
+            userWalls.RemoveAt(index);
+            if (index < wallObjects.Count && wallObjects[index] != null)
+            {
+                Destroy(wallObjects[index]);
+            }
+
+            if (index < wallObjects.Count)
+            {
+                wallObjects.RemoveAt(index);
+            }
+
+            return true;
         }
 
         public void ClearUserWalls()

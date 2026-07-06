@@ -19,7 +19,6 @@ namespace EnvForge.Navigation
 
         [SerializeField] private float dragPanSpeed = 0.025f;
         [SerializeField] private float keyboardPanSpeed = 10f;
-        [SerializeField] private float zoomSpeed = 0.18f;
         [SerializeField] private float fitPaddingMeters = 4f;
 
         private Camera controlledCamera;
@@ -137,7 +136,7 @@ namespace EnvForge.Navigation
             }
 
             Vector2 pointerPosition = mouse.position.ReadValue();
-            if (NavigationWorldEditorPanel.IsPointerEditingWorld)
+            if (NavigationWorldEditorPanel.IsPointerEditingWorld || IsPointerOverUiPanel(pointerPosition))
             {
                 dragging = false;
                 return;
@@ -161,15 +160,12 @@ namespace EnvForge.Navigation
                 Pan(new Vector2(-delta.x, -delta.y) * (dragPanSpeed * Mathf.Max(1f, groundDistance * 0.1f)));
             }
 
-            float scrollY = mouse.scroll.ReadValue().y;
-            if (Mathf.Abs(scrollY) > Mathf.Epsilon)
-            {
-                groundDistance = Mathf.Clamp(
-                    groundDistance * (1f - scrollY * zoomSpeed * 0.01f),
-                    MinGroundDistance,
-                    MaxGroundDistance);
-                ApplyCameraTransform();
-            }
+        }
+
+        private static bool IsPointerOverUiPanel(Vector2 screenPosition)
+        {
+            Vector2 guiPosition = new(screenPosition.x, Screen.height - screenPosition.y);
+            return NavigationInputBlocker.IsPointerOverPanel(guiPosition);
         }
 
         private void Pan(Vector2 move)

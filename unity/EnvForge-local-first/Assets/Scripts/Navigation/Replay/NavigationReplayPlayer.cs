@@ -4,7 +4,6 @@ using EnvForge.Navigation.Cloud;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 namespace EnvForge.Navigation.Replay
 {
@@ -89,6 +88,11 @@ namespace EnvForge.Navigation.Replay
             targetMotor = replayTarget.GetComponent<AgentMotor>();
             Camera segmentationCamera = replayTarget.GetComponentInChildren<Camera>(true);
             segmentationCameraTransform = segmentationCamera != null ? segmentationCamera.transform : null;
+        }
+
+        private void OnDestroy()
+        {
+            NavigationInputBlocker.UnregisterPanel(nameof(NavigationReplayPlayer));
         }
 
         public void LoadSteps(IReadOnlyList<ReplayLogStepDto> replaySteps)
@@ -283,17 +287,6 @@ namespace EnvForge.Navigation.Replay
 
         private void Update()
         {
-            Keyboard keyboard = Keyboard.current;
-            if (keyboard != null && keyboard.f9Key.wasPressedThisFrame)
-            {
-                showOverlay = !showOverlay;
-            }
-
-            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && showDetails)
-            {
-                showDetails = false;
-            }
-
             if (!isPlaying || steps.Count < 2)
             {
                 return;
@@ -339,6 +332,7 @@ namespace EnvForge.Navigation.Replay
         {
             if (!showOverlay || !HasReplay || IsCloudPanelExpanded() || IsWorldPanelExpanded())
             {
+                NavigationInputBlocker.UnregisterPanel(nameof(NavigationReplayPlayer));
                 return;
             }
 
@@ -358,6 +352,7 @@ namespace EnvForge.Navigation.Replay
             float boxHeight = Mathf.Min(CompactHeight, Screen.height - Padding * 2f);
             Rect boxRect = new(Padding, Screen.height - boxHeight - BottomMargin, boxWidth, boxHeight);
             GUI.Box(boxRect, GUIContent.none, boxStyle);
+            UpdatePointerOverPanel(boxRect);
 
             Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f);
             GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 32f), FormatCompactStatus(), labelStyle);
@@ -419,6 +414,7 @@ namespace EnvForge.Navigation.Replay
             float boxHeight = Mathf.Min(Height, Screen.height - Padding * 2f);
             Rect boxRect = new(Padding, Screen.height - boxHeight - BottomMargin, boxWidth, boxHeight);
             GUI.Box(boxRect, GUIContent.none, boxStyle);
+            UpdatePointerOverPanel(boxRect);
 
             Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f);
             GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 36f), "Replay", titleStyle);
@@ -508,6 +504,11 @@ namespace EnvForge.Navigation.Replay
             }
 
             return cloudRunPanel != null && cloudRunPanel.IsExpandedPanelOpen;
+        }
+
+        private static void UpdatePointerOverPanel(Rect panelRect)
+        {
+            NavigationInputBlocker.RegisterPanel(nameof(NavigationReplayPlayer), panelRect);
         }
 
         private bool IsWorldPanelExpanded()

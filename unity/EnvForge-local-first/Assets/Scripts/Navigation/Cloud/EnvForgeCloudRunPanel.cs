@@ -4,34 +4,29 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 namespace EnvForge.Navigation.Cloud
 {
     public sealed class EnvForgeCloudRunPanel : MonoBehaviour
     {
         private const float Padding = 12f;
-        private const float Width = 760f;
-        private const float Height = 390f;
         private const float CompactWidth = 620f;
-        private const float CompactHeight = 136f;
+        private const float CompactHeight = 186f;
         private const float CompactButtonHeight = 42f;
         private const float CompactTopMargin = 24f;
         private const float DetailsHeight = 620f;
         private const float ButtonHeight = 54f;
         private const float ButtonGap = 8f;
-        private const float StatusHeight = 222f;
-        private const float StatusLineHeight = 38f;
-        private const float StatusLabelWidth = 148f;
         private const int FontSize = 24;
         private const int StatusFontSize = 28;
         private const int SettingsFontSize = 22;
         private const int ButtonFontSize = 24;
-        private const int PrimaryButtonFontSize = 24;
         private const int ReplayDisplayEnvIndex = 0;
         private const float SettingsWidth = 760f;
         private const float SettingsHeight = 680f;
@@ -57,13 +52,14 @@ namespace EnvForge.Navigation.Cloud
         private string submissionId;
         private string webSocketUrlTemplate;
         private string activeScenarioId;
-        private string activeJobSettingsSummary;
-        private string activeJobTrainerSummary;
         private string loadedReplaySummary;
         private string resultStreamState = "not connected";
         private int resultStreamEventCount;
         private string lastResultStreamStatus;
         private string lastResultStreamReceivedAt;
+        private string lastResultStreamError;
+        private string lastResultFetchError;
+        private int consecutiveResultFetchFailures;
         private bool resultStreamErrorReported;
         private bool restoredJobNeedsResume;
         private bool autoDownloadStarted;
@@ -82,11 +78,12 @@ namespace EnvForge.Navigation.Cloud
         private bool showTrainingSettings;
         private bool showRewardSettings;
         private bool showJobDetails;
+        private bool showLibraryDetails;
         private Vector2 trainingSettingsScroll;
         private Vector2 jobDetailsScroll;
+        private Vector2 libraryDetailsScroll;
         private GUIStyle buttonStyle;
         private GUIStyle selectedButtonStyle;
-        private GUIStyle primaryButtonStyle;
         private GUIStyle labelStyle;
         private GUIStyle statusStyle;
         private GUIStyle detailStyle;
@@ -120,7 +117,7 @@ namespace EnvForge.Navigation.Cloud
         private string inactivePenaltyText;
         private string movementThresholdText;
 
-        public bool IsExpandedPanelOpen => showTrainingSettings || showJobDetails;
+        public bool IsExpandedPanelOpen => showTrainingSettings || showJobDetails || showLibraryDetails;
 
         public static bool IsTextInputFocused { get; private set; }
 
@@ -161,17 +158,6 @@ namespace EnvForge.Navigation.Cloud
 
         private void Update()
         {
-            Keyboard keyboard = Keyboard.current;
-            if (keyboard != null && keyboard.f10Key.wasPressedThisFrame)
-            {
-                showPanel = !showPanel;
-            }
-
-            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && IsExpandedPanelOpen)
-            {
-                CollapseExpandedPanel();
-            }
-
             ProcessResultStreamMessages();
             PollLatestResultIfNeeded();
         }
@@ -183,29 +169,26 @@ namespace EnvForge.Navigation.Cloud
                 replayPlayer.WindowBoundaryRequested -= HandleReplayWindowBoundaryRequested;
             }
 
+            EnvForge.Navigation.NavigationInputBlocker.UnregisterPanel(nameof(EnvForgeCloudRunPanel));
             resultWebSocketClient?.Dispose();
         }
 
         private void RestoreLatestJob()
         {
-            EnvForgeJobRecordDto latestJob = jobHistoryStore.Latest;
-            if (latestJob == null)
+            EnvForgeJobRecordDto recentJob = jobHistoryStore.MostRecentRecord;
+            if (recentJob == null)
             {
                 return;
             }
 
-            submissionId = latestJob.submission_id;
-            activeScenarioId = latestJob.scenario_id;
-            activeJobTrainerSummary = latestJob.trainer_summary;
-            activeJobSettingsSummary = string.IsNullOrWhiteSpace(latestJob.scenario_id)
-                ? latestJob.trainer_summary
-                : $"{latestJob.scenario_id} · {latestJob.trainer_summary}";
-            if (!string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path))
+            submissionId = recentJob.submission_id;
+            activeScenarioId = recentJob.scenario_id;
+            if (!string.IsNullOrWhiteSpace(recentJob.local_replay_manifest_path))
             {
-                loadedReplaySummary = $"Saved replay bundle: {Shorten(latestJob.submission_id, 18)}";
+                loadedReplaySummary = $"Saved replay bundle: {Shorten(recentJob.submission_id, 18)}";
             }
 
-            status = $"Cloud: restored {Shorten(latestJob.submission_id, 18)}";
+            status = $"Cloud: restored {Shorten(recentJob.submission_id, 18)}";
             restoredJobNeedsResume = !string.IsNullOrWhiteSpace(submissionId);
         }
 
@@ -214,37 +197,44 @@ namespace EnvForge.Navigation.Cloud
             if (!showPanel)
             {
                 IsTextInputFocused = false;
+                EnvForge.Navigation.NavigationInputBlocker.UnregisterPanel(nameof(EnvForgeCloudRunPanel));
                 return;
             }
 
             EnsureStyles();
             IsTextInputFocused = false;
+            Rect boxRect = DrawCompactPanel();
+            Rect expandedRect = Rect.zero;
             if (!IsExpandedPanelOpen)
             {
-                DrawCompactPanel();
+                UpdatePointerOverPanel(boxRect, expandedRect);
                 return;
             }
-
-            float boxWidth = Mathf.Min(Width, Screen.width - Padding * 2f);
-            float boxHeight = Mathf.Min(Height, Screen.height - Padding * 2f);
-            Rect boxRect = new(Screen.width - boxWidth - Padding, Padding, boxWidth, boxHeight);
-            GUI.Box(boxRect, GUIContent.none, boxStyle);
-            DrawMainPanel(boxRect);
 
             if (showTrainingSettings)
             {
                 float settingsWidth = Mathf.Min(SettingsWidth, Screen.width - Padding * 2f);
                 Rect settingsRect = BuildExpandedPanelRect(boxRect, settingsWidth, SettingsHeight);
                 DrawTrainingSettings(settingsRect);
+                expandedRect = settingsRect;
             }
             else if (showJobDetails)
             {
-                Rect detailsRect = BuildExpandedPanelRect(boxRect, boxWidth, DetailsHeight);
+                Rect detailsRect = BuildExpandedPanelRect(boxRect, boxRect.width, DetailsHeight);
                 DrawJobDetails(detailsRect);
+                expandedRect = detailsRect;
             }
+            else if (showLibraryDetails)
+            {
+                Rect detailsRect = BuildExpandedPanelRect(boxRect, boxRect.width, DetailsHeight);
+                DrawLibraryDetails(detailsRect);
+                expandedRect = detailsRect;
+            }
+
+            UpdatePointerOverPanel(boxRect, expandedRect);
         }
 
-        private void DrawCompactPanel()
+        private Rect DrawCompactPanel()
         {
             float boxWidth = Mathf.Min(CompactWidth, Screen.width - Padding * 2f);
             float boxHeight = Mathf.Min(CompactHeight, Screen.height - Padding * 2f);
@@ -255,44 +245,8 @@ namespace EnvForge.Navigation.Cloud
             GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 34f), FormatCompactStatus(), compactDetailStyle);
             GUI.Label(new Rect(contentRect.x, contentRect.y + 34f, contentRect.width, 30f), FormatCompactJobSummary(), compactDetailStyle);
 
-            float buttonTop = contentRect.y + 70f;
-            float buttonWidth = (contentRect.width - ButtonGap * 4f) / 5f;
-            Rect replayRect = new(contentRect.x, buttonTop, buttonWidth, CompactButtonHeight);
-            Rect settingsRect = new(replayRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
-            Rect submitRect = new(settingsRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
-            Rect jobRect = new(submitRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
-            Rect inferenceRect = new(jobRect.xMax + ButtonGap, buttonTop, buttonWidth, CompactButtonHeight);
-
-            if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), buttonStyle, !busy))
-            {
-                StartCoroutine(LoadLatestReplay());
-            }
-
-            if (DrawButton(settingsRect, new GUIContent("Settings", "Training settings"), buttonStyle, !busy))
-            {
-                showTrainingSettings = true;
-                showJobDetails = false;
-                SyncTextFromTrainingSettings();
-            }
-
-            if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
-            {
-                StartCoroutine(SubmitAndTrain());
-            }
-
-            if (DrawButton(jobRect, new GUIContent("Job", "Job details"), buttonStyle, !busy))
-            {
-                showTrainingSettings = false;
-                showJobDetails = true;
-            }
-
-            GUIStyle inferenceButtonStyle = inferenceController != null && inferenceController.IsRunning
-                ? selectedButtonStyle
-                : buttonStyle;
-            if (DrawButton(inferenceRect, new GUIContent("Run AI", "Run downloaded model"), inferenceButtonStyle, !busy))
-            {
-                ToggleInferenceMode();
-            }
+            DrawActionButtons(contentRect, contentRect.y + 70f, CompactButtonHeight);
+            return boxRect;
         }
 
         private string FormatCompactStatus()
@@ -308,7 +262,7 @@ namespace EnvForge.Navigation.Cloud
 
         private string FormatCompactJobSummary()
         {
-            return $"{Shorten(GetVisibleTrainerSummary(), 28)} · {FormatSensorSummary(sceneBuilder?.TrainingSettings)}";
+            return $"{FormatTrainingCoreSummary(sceneBuilder?.TrainingSettings)} · {FormatSensorSummary(sceneBuilder?.TrainingSettings)}";
         }
 
         private string FormatCompactStreamState()
@@ -350,6 +304,7 @@ namespace EnvForge.Navigation.Cloud
             showTrainingSettings = true;
             showRewardSettings = rewardSettings;
             showJobDetails = false;
+            showLibraryDetails = false;
             SyncTextFromTrainingSettings();
         }
 
@@ -358,54 +313,32 @@ namespace EnvForge.Navigation.Cloud
             showPanel = true;
             showTrainingSettings = false;
             showJobDetails = true;
+            showLibraryDetails = false;
         }
 
-        private void DrawMainPanel(Rect boxRect)
+        private void CollapseExpandedPanel()
         {
-            Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxRect.width - Padding * 2f, boxRect.height - Padding * 2f);
-            float y = contentRect.y;
+            showTrainingSettings = false;
+            showJobDetails = false;
+            showLibraryDetails = false;
+        }
 
-            float topButtonWidth = (contentRect.width - ButtonGap * 2f) / 3f;
-            Rect replayRect = new(contentRect.x, y, topButtonWidth, ButtonHeight);
-            Rect cfgRect = new(replayRect.xMax + ButtonGap, y, topButtonWidth, ButtonHeight);
-            Rect inferenceRect = new(cfgRect.xMax + ButtonGap, y, topButtonWidth, ButtonHeight);
+        private void DrawActionButtons(Rect contentRect, float top, float height)
+        {
+            float buttonWidth = (contentRect.width - ButtonGap * 3f) / 4f;
+            Rect replayRect = new(contentRect.x, top, buttonWidth, height);
+            Rect submitRect = new(replayRect.xMax + ButtonGap, top, buttonWidth, height);
+            Rect downloadRect = new(submitRect.xMax + ButtonGap, top, buttonWidth, height);
+            Rect aiRect = new(downloadRect.xMax + ButtonGap, top, buttonWidth, height);
 
-            if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), primaryButtonStyle, !busy))
+            if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), buttonStyle, !busy))
             {
                 StartCoroutine(LoadLatestReplay());
             }
 
-            GUIStyle cfgButtonStyle = showTrainingSettings ? selectedButtonStyle : buttonStyle;
-            if (DrawButton(cfgRect, new GUIContent("Settings", "Training settings"), cfgButtonStyle, !busy))
-            {
-                showTrainingSettings = !showTrainingSettings;
-                showJobDetails = false;
-                SyncTextFromTrainingSettings();
-            }
-
-            GUIStyle inferenceButtonStyle = inferenceController != null && inferenceController.IsRunning
-                ? selectedButtonStyle
-                : buttonStyle;
-            if (DrawButton(inferenceRect, new GUIContent("Run AI", "Run downloaded model"), inferenceButtonStyle, !busy))
-            {
-                ToggleInferenceMode();
-            }
-
-            y += ButtonHeight + ButtonGap;
-            float secondaryButtonWidth = (contentRect.width - ButtonGap * 2f) / 3f;
-            Rect submitRect = new(contentRect.x, y, secondaryButtonWidth, ButtonHeight);
-            Rect detailsRect = new(submitRect.xMax + ButtonGap, y, secondaryButtonWidth, ButtonHeight);
-            Rect downloadRect = new(detailsRect.xMax + ButtonGap, y, secondaryButtonWidth, ButtonHeight);
-
             if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
             {
                 StartCoroutine(SubmitAndTrain());
-            }
-
-            GUIStyle detailsButtonStyle = showJobDetails ? selectedButtonStyle : buttonStyle;
-            if (DrawButton(detailsRect, new GUIContent("Job", "Job details"), detailsButtonStyle, !busy))
-            {
-                ToggleJobDetails();
             }
 
             if (DrawButton(downloadRect, new GUIContent("Download", "Download artifacts"), buttonStyle, !busy))
@@ -413,14 +346,37 @@ namespace EnvForge.Navigation.Cloud
                 StartCoroutine(DownloadAvailableArtifacts());
             }
 
-            y += ButtonHeight + ButtonGap * 2f;
-            DrawHudStatus(new Rect(contentRect.x, y, contentRect.width, StatusHeight));
-        }
+            GUIStyle aiButtonStyle = inferenceController != null && inferenceController.IsRunning
+                ? selectedButtonStyle
+                : buttonStyle;
+            if (DrawButton(aiRect, new GUIContent("Run AI", "Run downloaded model"), aiButtonStyle, !busy))
+            {
+                ToggleInferenceMode();
+            }
 
-        private void CollapseExpandedPanel()
-        {
-            showTrainingSettings = false;
-            showJobDetails = false;
+            float secondTop = top + height + ButtonGap;
+            float secondaryWidth = (contentRect.width - ButtonGap * 2f) / 3f;
+            Rect jobRect = new(contentRect.x, secondTop, secondaryWidth, height);
+            Rect libraryRect = new(jobRect.xMax + ButtonGap, secondTop, secondaryWidth, height);
+            Rect settingsRect = new(libraryRect.xMax + ButtonGap, secondTop, secondaryWidth, height);
+
+            GUIStyle jobStyle = showJobDetails ? selectedButtonStyle : buttonStyle;
+            if (DrawButton(jobRect, new GUIContent("Job", "Job details"), jobStyle, !busy))
+            {
+                ToggleJobDetails();
+            }
+
+            GUIStyle libraryStyle = showLibraryDetails ? selectedButtonStyle : buttonStyle;
+            if (DrawButton(libraryRect, new GUIContent("Library", "Maps, results, models"), libraryStyle, !busy))
+            {
+                ToggleLibraryDetails();
+            }
+
+            GUIStyle settingsStyle = showTrainingSettings ? selectedButtonStyle : buttonStyle;
+            if (DrawButton(settingsRect, new GUIContent("Settings", "Training settings"), settingsStyle, !busy))
+            {
+                ToggleTrainingSettings();
+            }
         }
 
         private static bool DrawButton(Rect rect, GUIContent content, GUIStyle style, bool enabled)
@@ -432,6 +388,21 @@ namespace EnvForge.Navigation.Cloud
             return clicked;
         }
 
+        private static void UpdatePointerOverPanel(Rect compactRect, Rect expandedRect)
+        {
+            Rect panelRect = expandedRect == Rect.zero ? compactRect : Union(compactRect, expandedRect);
+            EnvForge.Navigation.NavigationInputBlocker.RegisterPanel(nameof(EnvForgeCloudRunPanel), panelRect);
+        }
+
+        private static Rect Union(Rect first, Rect second)
+        {
+            float xMin = Mathf.Min(first.xMin, second.xMin);
+            float yMin = Mathf.Min(first.yMin, second.yMin);
+            float xMax = Mathf.Max(first.xMax, second.xMax);
+            float yMax = Mathf.Max(first.yMax, second.yMax);
+            return Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+        }
+
         private IEnumerator SubmitAndTrain()
         {
             busy = true;
@@ -441,6 +412,9 @@ namespace EnvForge.Navigation.Cloud
             resultStreamEventCount = 0;
             lastResultStreamStatus = null;
             lastResultStreamReceivedAt = null;
+            lastResultStreamError = null;
+            lastResultFetchError = null;
+            consecutiveResultFetchFailures = 0;
             resultStreamErrorReported = false;
             autoDownloadStarted = false;
             nextResultPollAt = Time.unscaledTime + ResultPollIntervalSeconds;
@@ -448,21 +422,20 @@ namespace EnvForge.Navigation.Cloud
 
             ScenarioBundleDto scenario = sceneBuilder.BuildScenarioBundle();
             activeScenarioId = scenario.scenario_id;
-            activeJobSettingsSummary = FormatScenarioSummary(scenario);
-            activeJobTrainerSummary = FormatScenarioTrainerSummary(scenario);
+            string trainerSummary = FormatScenarioTrainerSummary(scenario);
             bool failed = false;
             yield return apiClient.SubmitScenario(
                 scenario,
                 response =>
                 {
                     submissionId = response.submission_id;
-                    jobHistoryStore.UpsertSubmittedJob(submissionId, scenario, activeJobTrainerSummary);
+                    jobHistoryStore.UpsertSubmittedJob(submissionId, scenario, trainerSummary);
                     status = $"Cloud: submitted {submissionId}";
                 },
                 error =>
                 {
                     failed = true;
-                    status = $"Cloud submit failed: {error}";
+                    status = $"Cloud submit failed: {FormatUserFacingError(error)}";
                 });
 
             if (failed || string.IsNullOrEmpty(submissionId))
@@ -478,7 +451,7 @@ namespace EnvForge.Navigation.Cloud
                 error =>
                 {
                     failed = true;
-                    status = $"Cloud train failed: {error}";
+                    status = $"Cloud train failed: {FormatUserFacingError(error)}";
                 });
 
             busy = false;
@@ -509,11 +482,12 @@ namespace EnvForge.Navigation.Cloud
                 yield break;
             }
 
+            string requestedSubmissionId = submissionId;
             resultFetchInFlight = true;
             bool found = false;
             ResultDocumentDto fetchedResult = null;
             yield return apiClient.GetResult(
-                submissionId,
+                requestedSubmissionId,
                 result =>
                 {
                     found = true;
@@ -521,18 +495,29 @@ namespace EnvForge.Navigation.Cloud
                 },
                 error =>
                 {
-                    status = $"Cloud: result fetch pending ({source})";
-                    Debug.LogWarning($"Result fetch failed for {submissionId}: {error}");
+                    HandleResultFetchError(source, requestedSubmissionId, error);
                 });
             resultFetchInFlight = false;
-            nextResultPollAt = Time.unscaledTime + ResultPollIntervalSeconds;
+            nextResultPollAt = Time.unscaledTime + GetResultPollBackoffSeconds();
+
+            if (!string.Equals(requestedSubmissionId, submissionId, StringComparison.Ordinal))
+            {
+                Debug.Log($"Ignored result fetch for inactive job {Shorten(requestedSubmissionId, 18)}");
+                yield break;
+            }
 
             if (!found || fetchedResult == null)
             {
                 yield break;
             }
 
-            ApplyResultUpdate(fetchedResult, countStreamEvent: false);
+            lastResultFetchError = null;
+            consecutiveResultFetchFailures = 0;
+            if (!ApplyResultUpdate(fetchedResult, requestedSubmissionId, countStreamEvent: false))
+            {
+                yield break;
+            }
+
             status = $"Cloud: fetched {fetchedResult.status}";
             TryAutoDownloadArtifacts();
         }
@@ -542,8 +527,7 @@ namespace EnvForge.Navigation.Cloud
             if (string.IsNullOrWhiteSpace(submissionId) ||
                 apiClient == null ||
                 resultFetchInFlight ||
-                IsCompletedResult() ||
-                string.Equals(latestResult?.status, "failed", StringComparison.OrdinalIgnoreCase) ||
+                IsTerminalResultStatus(latestResult?.status) ||
                 Time.unscaledTime < nextResultPollAt)
             {
                 return;
@@ -554,6 +538,7 @@ namespace EnvForge.Navigation.Cloud
 
         private void StartResultStream()
         {
+            StopResultStream("reconnecting");
             string url = BuildResultWebSocketUrl(submissionId);
             if (string.IsNullOrWhiteSpace(url))
             {
@@ -562,10 +547,13 @@ namespace EnvForge.Navigation.Cloud
                 Debug.LogWarning("Result stream URL is not configured. Set WebSocket Url Template on ApiSettings or NavigationSceneBuilder.");
                 showTrainingSettings = false;
                 showJobDetails = true;
+                showLibraryDetails = false;
                 return;
             }
 
             resultStreamState = "connecting";
+            lastResultStreamError = null;
+            resultStreamErrorReported = false;
             resultWebSocketClient.Start(url);
             status = "Cloud: listening for result";
         }
@@ -591,25 +579,44 @@ namespace EnvForge.Navigation.Cloud
                 if (string.IsNullOrWhiteSpace(result?.submission_id) ||
                     string.IsNullOrWhiteSpace(result.status))
                 {
-                    Debug.LogWarning($"Ignored result stream message: {message}");
+                    Debug.LogWarning($"Ignored result stream message: {Shorten(message, 160)}");
                     continue;
                 }
 
-                ApplyResultUpdate(result);
+                ApplyResultUpdate(result, submissionId);
             }
 
             string streamError = resultWebSocketClient.LastError;
             if (!resultStreamErrorReported && !string.IsNullOrWhiteSpace(streamError))
             {
                 resultStreamErrorReported = true;
+                lastResultStreamError = streamError;
+                if (IsExpectedResultStreamClose(streamError))
+                {
+                    StopResultStream("closed");
+                    status = "Cloud: result stream closed";
+                    return;
+                }
+
                 resultStreamState = "failed";
-                status = $"Result stream failed: {streamError}";
+                status = $"Result stream failed: {FormatUserFacingError(streamError)}";
                 Debug.LogWarning($"Result stream failed: {streamError}");
             }
         }
 
-        private void ApplyResultUpdate(ResultDocumentDto result, bool countStreamEvent = true)
+        private bool ApplyResultUpdate(ResultDocumentDto result, string expectedSubmissionId = null, bool countStreamEvent = true)
         {
+            string resultSubmissionId = string.IsNullOrWhiteSpace(result?.submission_id)
+                ? expectedSubmissionId ?? submissionId
+                : result.submission_id;
+            string activeSubmissionId = expectedSubmissionId ?? submissionId;
+            if (!string.IsNullOrWhiteSpace(activeSubmissionId) &&
+                !string.Equals(resultSubmissionId, activeSubmissionId, StringComparison.Ordinal))
+            {
+                Debug.Log($"Ignored result for inactive job {Shorten(resultSubmissionId, 18)}; active {Shorten(activeSubmissionId, 18)}");
+                return false;
+            }
+
             latestResult = result;
             if (countStreamEvent)
             {
@@ -618,23 +625,20 @@ namespace EnvForge.Navigation.Cloud
 
             lastResultStreamStatus = result.status;
             lastResultStreamReceivedAt = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
-            string resultSubmissionId = string.IsNullOrWhiteSpace(result.submission_id)
-                ? submissionId
-                : result.submission_id;
             jobHistoryStore.UpsertResult(resultSubmissionId, result);
             status = $"Cloud: {result.status}";
 
-            if (string.Equals(result.status, "completed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(result.status, "failed", StringComparison.OrdinalIgnoreCase))
+            if (IsTerminalResultStatus(result.status))
             {
-                resultStreamState = "closed";
-                resultWebSocketClient?.Stop();
+                StopResultStream("closed");
                 TryAutoDownloadArtifacts();
             }
             else
             {
                 resultStreamState = "receiving";
             }
+
+            return true;
         }
 
         private void TryAutoDownloadArtifacts()
@@ -650,12 +654,12 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            EnvForgeJobRecordDto latestJob = jobHistoryStore?.Latest;
-            if (latestJob != null &&
-                !string.IsNullOrWhiteSpace(latestJob.local_onnx_path) &&
-                !string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path) &&
-                File.Exists(latestJob.local_replay_manifest_path) &&
-                File.Exists(latestJob.local_onnx_path))
+            EnvForgeJobRecordDto activeJob = GetActiveJobRecord();
+            if (activeJob != null &&
+                !string.IsNullOrWhiteSpace(activeJob.local_onnx_path) &&
+                !string.IsNullOrWhiteSpace(activeJob.local_replay_manifest_path) &&
+                File.Exists(activeJob.local_replay_manifest_path) &&
+                File.Exists(activeJob.local_onnx_path))
             {
                 return;
             }
@@ -682,7 +686,7 @@ namespace EnvForge.Navigation.Cloud
                 error =>
                 {
                     busy = false;
-                    status = $"Replay download failed: {error}";
+                    status = $"Replay download failed: {FormatUserFacingError(error)}";
                 });
             if (manifest == null)
             {
@@ -703,6 +707,7 @@ namespace EnvForge.Navigation.Cloud
                 status = "Cloud: wait for DONE before download";
                 showTrainingSettings = false;
                 showJobDetails = true;
+                showLibraryDetails = false;
                 yield break;
             }
 
@@ -713,6 +718,7 @@ namespace EnvForge.Navigation.Cloud
                 status = "Cloud: no downloadable artifacts";
                 showTrainingSettings = false;
                 showJobDetails = true;
+                showLibraryDetails = false;
                 yield break;
             }
 
@@ -730,7 +736,7 @@ namespace EnvForge.Navigation.Cloud
         private IEnumerator DownloadModelArtifacts()
         {
             busy = true;
-            string outputDir = Path.Combine(Application.persistentDataPath, "EnvForge", submissionId ?? "latest");
+            string outputDir = Path.Combine(Application.persistentDataPath, "EnvForge", GetSafeSubmissionDirectoryName(submissionId));
             ResultArtifactsDto artifacts = GetResultArtifacts();
             if (artifacts.onnx_model != null)
             {
@@ -758,104 +764,113 @@ namespace EnvForge.Navigation.Cloud
             return string.Equals(latestResult?.status, "completed", StringComparison.OrdinalIgnoreCase);
         }
 
-        private void DrawHudStatus(Rect rect)
+        private void HandleResultFetchError(string source, string requestedSubmissionId, string error)
         {
-            string[] lines = FormatHudStatusLines();
-            GUI.Label(new Rect(rect.x, rect.y, rect.width, StatusLineHeight), lines[0], statusStyle);
+            if (!string.Equals(requestedSubmissionId, submissionId, StringComparison.Ordinal))
+            {
+                Debug.Log($"Ignored result fetch error for inactive job {Shorten(requestedSubmissionId, 18)}: {FormatUserFacingError(error)}");
+                return;
+            }
 
-            Rect scenarioLabelRect = new(rect.x, rect.y + StatusLineHeight, StatusLabelWidth, StatusLineHeight);
-            Rect scenarioValueRect = new(scenarioLabelRect.xMax, scenarioLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
-            GUI.Label(scenarioLabelRect, "SCENE", labelStyle);
-            GUI.Label(scenarioValueRect, lines[1], detailStyle);
+            consecutiveResultFetchFailures += 1;
+            status = $"Cloud: result unavailable ({source})";
+            bool repeatedError = string.Equals(lastResultFetchError, error, StringComparison.Ordinal);
+            lastResultFetchError = error;
 
-            Rect trainerLabelRect = new(rect.x, rect.y + StatusLineHeight * 2f, StatusLabelWidth, StatusLineHeight);
-            Rect trainerValueRect = new(trainerLabelRect.xMax, trainerLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
-            GUI.Label(trainerLabelRect, "TRAIN", labelStyle);
-            GUI.Label(trainerValueRect, lines[2], detailStyle);
+            if (!repeatedError)
+            {
+                Debug.LogWarning($"Result fetch failed for {submissionId}: {error}");
+            }
 
-            Rect streamLabelRect = new(rect.x, rect.y + StatusLineHeight * 3f, StatusLabelWidth, StatusLineHeight);
-            Rect streamValueRect = new(streamLabelRect.xMax, streamLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
-            GUI.Label(streamLabelRect, "STREAM", labelStyle);
-            GUI.Label(streamValueRect, lines[3], detailStyle);
-
-            Rect sensorLabelRect = new(rect.x, rect.y + StatusLineHeight * 4f, StatusLabelWidth, StatusLineHeight);
-            Rect sensorValueRect = new(sensorLabelRect.xMax, sensorLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
-            GUI.Label(sensorLabelRect, "SENSOR", labelStyle);
-            GUI.Label(sensorValueRect, lines[4], detailStyle);
-
-            Rect ppoLabelRect = new(rect.x, rect.y + StatusLineHeight * 5f, StatusLabelWidth, StatusLineHeight);
-            Rect ppoValueRect = new(ppoLabelRect.xMax, ppoLabelRect.y, rect.width - StatusLabelWidth, StatusLineHeight);
-            GUI.Label(ppoLabelRect, "PPO", labelStyle);
-            GUI.Label(ppoValueRect, lines[5], detailStyle);
+            if (IsMissingResultError(error))
+            {
+                latestResult = new ResultDocumentDto
+                {
+                    submission_id = requestedSubmissionId,
+                    status = "missing",
+                };
+                jobHistoryStore?.UpsertResult(requestedSubmissionId, latestResult);
+                StopResultStream("missing result");
+            }
         }
 
-        private string[] FormatHudStatusLines()
+        private float GetResultPollBackoffSeconds()
         {
-            string resultStatus = latestResult?.status;
-            string hudStatus;
-            if (busy)
+            if (IsTerminalResultStatus(latestResult?.status))
             {
-                hudStatus = "WORKING";
-            }
-            else if (string.Equals(resultStatus, "completed", StringComparison.OrdinalIgnoreCase))
-            {
-                hudStatus = "DONE";
-            }
-            else if (string.Equals(resultStatus, "failed", StringComparison.OrdinalIgnoreCase))
-            {
-                hudStatus = "FAILED";
-            }
-            else if (string.Equals(resultStatus, "running", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resultStatus, "starting", StringComparison.OrdinalIgnoreCase))
-            {
-                hudStatus = "RUNNING";
-            }
-            else if (string.Equals(resultStatus, "queued", StringComparison.OrdinalIgnoreCase))
-            {
-                hudStatus = "QUEUED";
-            }
-            else if (!string.IsNullOrEmpty(submissionId) && resultStreamEventCount == 0)
-            {
-                hudStatus = "NO EVENT";
-            }
-            else
-            {
-                hudStatus = string.IsNullOrEmpty(submissionId) ? "IDLE" : "WAITING";
+                return ResultPollIntervalSeconds;
             }
 
-            string scenario = !string.IsNullOrEmpty(activeScenarioId)
-                ? activeScenarioId
-                : "none";
-            return new[]
+            if (IsNetworkDestinationError(lastResultFetchError))
             {
-                hudStatus,
-                scenario,
-                GetVisibleTrainerSummary(),
-                FormatResultStreamSummary(),
-                FormatSensorSummary(sceneBuilder?.TrainingSettings),
-                FormatPpoSummary(sceneBuilder?.TrainingSettings),
-            };
+                return ResultPollIntervalSeconds * 4f;
+            }
+
+            if (consecutiveResultFetchFailures >= 3)
+            {
+                return ResultPollIntervalSeconds * 2f;
+            }
+
+            return ResultPollIntervalSeconds;
         }
 
-        private string GetVisibleSettingsSummary()
+        private void StopResultStream(string nextState)
         {
-            if (!string.IsNullOrEmpty(activeJobSettingsSummary))
-            {
-                return activeJobSettingsSummary;
-            }
-
-            return FormatTrainingSummary(sceneBuilder?.TrainingSettings);
+            resultWebSocketClient?.Stop();
+            resultStreamState = string.IsNullOrWhiteSpace(nextState) ? "closed" : nextState;
         }
 
-        private static string FormatTrainingSummary(NavigationTrainingSettings settings)
+        private static bool IsTerminalResultStatus(string resultStatus)
+        {
+            return string.Equals(resultStatus, "completed", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(resultStatus, "failed", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(resultStatus, "cancelled", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(resultStatus, "canceled", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(resultStatus, "deleted", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(resultStatus, "missing", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsExpectedResultStreamClose(string error)
+        {
+            return !string.IsNullOrWhiteSpace(error) &&
+                error.Contains("closed the WebSocket connection without completing the close handshake", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsMissingResultError(string error)
+        {
+            return !string.IsNullOrWhiteSpace(error) &&
+                (error.Contains("404", StringComparison.OrdinalIgnoreCase) ||
+                 error.Contains("410", StringComparison.OrdinalIgnoreCase) ||
+                 error.Contains("result not found", StringComparison.OrdinalIgnoreCase) ||
+                 error.Contains("result deleted", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsNetworkDestinationError(string error)
+        {
+            return !string.IsNullOrWhiteSpace(error) &&
+                (error.Contains("Cannot resolve destination host", StringComparison.OrdinalIgnoreCase) ||
+                 error.Contains("Name or service not known", StringComparison.OrdinalIgnoreCase) ||
+                 error.Contains("No such host", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string FormatTrainingCoreSummary(NavigationTrainingSettings settings)
         {
             if (settings == null)
             {
-                return string.Empty;
+                return "none";
             }
 
-            return $"{settings.PresetName} · {FormatSteps(settings.Timesteps)} · seed {settings.Seed} · " +
-                   $"envs {settings.NEnvs} · {FormatSensorSummary(settings)}";
+            return $"ppo · {FormatSteps(settings.Timesteps)} · seed {settings.Seed} · envs {settings.NEnvs}";
+        }
+
+        private static string FormatResourceSummary(NavigationTrainingSettings settings)
+        {
+            if (settings == null)
+            {
+                return "none";
+            }
+
+            return $"cpu {settings.CpuCount} · torch {settings.TorchNumThreads}";
         }
 
         private static string FormatSensorSummary(NavigationTrainingSettings settings)
@@ -895,7 +910,7 @@ namespace EnvForge.Navigation.Cloud
 
         private string GetLocalReplayManifestPath()
         {
-            string outputDir = Path.Combine(Application.persistentDataPath, "EnvForge", submissionId ?? "latest", "replay");
+            string outputDir = Path.Combine(Application.persistentDataPath, "EnvForge", GetSafeSubmissionDirectoryName(submissionId), "replay");
             return Path.Combine(outputDir, "manifest.json");
         }
 
@@ -978,7 +993,7 @@ namespace EnvForge.Navigation.Cloud
                     error =>
                     {
                         failed = true;
-                        status = $"Replay chunk download failed: {error}";
+                        status = $"Replay chunk download failed: {FormatUserFacingError(error)}";
                     });
 
                 if (failed)
@@ -1029,7 +1044,9 @@ namespace EnvForge.Navigation.Cloud
             string outputDir = Path.GetDirectoryName(manifestPath);
             return string.IsNullOrEmpty(outputDir)
                 ? string.Empty
-                : Path.Combine(outputDir, chunk.path.Replace('/', Path.DirectorySeparatorChar));
+                : TryBuildSafeChildPath(outputDir, chunk.path, out string localPath)
+                    ? localPath
+                    : string.Empty;
         }
 
         private int GetReplayChunkGlobalStartStepIndex(int chunkIndex)
@@ -1128,7 +1145,7 @@ namespace EnvForge.Navigation.Cloud
                     onSaved?.Invoke(savedPath);
                     status = $"Cloud: saved {savedPath}";
                 },
-                error => status = $"Model download failed: {error}");
+                error => status = $"Download failed: {FormatUserFacingError(error)}");
         }
 
         private void DrawJobDetails(Rect panelRect)
@@ -1140,22 +1157,31 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Label("Result", statusStyle);
             GUILayout.Label($"Status: {latestResult?.status ?? "none"}", detailStyle);
             GUILayout.Label(FormatResultStreamSummary(), detailStyle);
+            if (!string.IsNullOrWhiteSpace(lastResultFetchError))
+            {
+                GUILayout.Label($"Last fetch error: {FormatUserFacingError(lastResultFetchError)}", detailStyle);
+            }
+
+            if (!string.IsNullOrWhiteSpace(lastResultStreamError))
+            {
+                GUILayout.Label($"Last stream error: {FormatUserFacingError(lastResultStreamError)}", detailStyle);
+            }
 
             GUILayout.Space(8f);
             GUILayout.Label("Submitted Job", labelStyle);
             GUILayout.Label($"Job: {Shorten(submissionId, 18)}", detailStyle);
             GUILayout.Label($"Scenario: {activeScenarioId ?? "none"}", detailStyle);
-            GUILayout.Label($"Trainer: {GetVisibleTrainerSummary()}", detailStyle);
-            GUILayout.Label($"Settings: {GetVisibleSettingsSummary()}", detailStyle);
-            GUILayout.Label($"Sensor: {FormatSensorSummary(sceneBuilder?.TrainingSettings)}", detailStyle);
+            GUILayout.Label($"Training: {FormatTrainingCoreSummary(sceneBuilder?.TrainingSettings)}", detailStyle);
+            GUILayout.Label($"Resources: {FormatResourceSummary(sceneBuilder?.TrainingSettings)}", detailStyle);
             GUILayout.Label($"PPO: {FormatPpoSummary(sceneBuilder?.TrainingSettings)}", detailStyle);
+            GUILayout.Label($"Sensor: {FormatSensorSummary(sceneBuilder?.TrainingSettings)}", detailStyle);
             GUILayout.Label(FormatProgressSummary(), detailStyle);
 
             GUILayout.Space(8f);
-            GUILayout.Label("Loaded Replay", labelStyle);
-            GUILayout.Label(loadedReplaySummary ?? "Replay: none", detailStyle);
-            GUILayout.Label($"Artifacts: replay {FormatArtifactState(GetResultArtifacts()?.replay_bundle)} · model {FormatModelArtifactState(GetResultArtifacts())}", detailStyle);
-            GUILayout.Label(FormatHistorySummary(), detailStyle);
+            GUILayout.Label("Runtime", labelStyle);
+            GUILayout.Label(FormatReplayLoadedSummary(), detailStyle);
+            GUILayout.Label(FormatCloudArtifactSummary(), detailStyle);
+            GUILayout.Label(FormatLocalArtifactSummary(), detailStyle);
             GUILayout.Label(FormatInferenceSummary(), detailStyle);
             if (!string.IsNullOrWhiteSpace(inferenceController?.LastObservationSummary))
             {
@@ -1164,7 +1190,7 @@ namespace EnvForge.Navigation.Cloud
 
             if (!string.IsNullOrWhiteSpace(inferenceController?.LastErrorDetails))
             {
-                GUILayout.Label($"Inference error: {inferenceController.LastErrorDetails}", detailStyle);
+                GUILayout.Label($"AI error: {FormatUserFacingError(inferenceController.LastErrorDetails)}", detailStyle);
             }
 
             if (!string.IsNullOrWhiteSpace(status))
@@ -1177,6 +1203,113 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.EndArea();
         }
 
+        private void DrawLibraryDetails(Rect panelRect)
+        {
+            GUI.Box(panelRect, GUIContent.none, boxStyle);
+            GUILayout.BeginArea(new Rect(panelRect.x + Padding, panelRect.y + Padding, panelRect.width - Padding * 2f, panelRect.height - Padding * 2f));
+            libraryDetailsScroll = GUILayout.BeginScrollView(libraryDetailsScroll);
+
+            GUILayout.Label("Library", statusStyle);
+            GUILayout.Label(FormatHistorySummary(), detailStyle);
+            GUILayout.Label("Saved maps: latest-map.json", detailStyle);
+            GUILayout.Space(8f);
+
+            if (jobHistoryStore == null || jobHistoryStore.Jobs.Count == 0)
+            {
+                GUILayout.Label("No jobs yet", detailStyle);
+            }
+            else
+            {
+                int count = Mathf.Min(jobHistoryStore.Jobs.Count, 10);
+                for (int i = 0; i < count; i++)
+                {
+                    EnvForgeJobRecordDto job = jobHistoryStore.Jobs[i];
+                    if (job == null)
+                    {
+                        continue;
+                    }
+
+                    bool selected = string.Equals(job.submission_id, submissionId, StringComparison.OrdinalIgnoreCase);
+                    GUILayout.Label(FormatLibraryJobSummary(job, selected), detailStyle);
+                    GUILayout.BeginHorizontal();
+                    if (GUILayout.Button("Select", selected ? selectedButtonStyle : buttonStyle, GUILayout.Height(ButtonHeight)))
+                    {
+                        SelectLibraryJob(job, reconnect: false);
+                    }
+
+                    bool hasReplay = !string.IsNullOrWhiteSpace(job.local_replay_manifest_path) && File.Exists(job.local_replay_manifest_path);
+                    bool previousEnabled = GUI.enabled;
+                    GUI.enabled = previousEnabled && hasReplay;
+                    if (GUILayout.Button("Replay", buttonStyle, GUILayout.Height(ButtonHeight)))
+                    {
+                        SelectLibraryJob(job, reconnect: false);
+                        StartCoroutine(LoadLatestReplay());
+                    }
+
+                    GUI.enabled = previousEnabled && !string.IsNullOrWhiteSpace(job.submission_id);
+                    if (GUILayout.Button("Fetch", buttonStyle, GUILayout.Height(ButtonHeight)))
+                    {
+                        SelectLibraryJob(job, reconnect: true);
+                    }
+
+                    GUI.enabled = previousEnabled;
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(6f);
+                }
+            }
+
+            GUILayout.EndScrollView();
+            GUILayout.EndArea();
+        }
+
+        private void SelectLibraryJob(EnvForgeJobRecordDto job, bool reconnect)
+        {
+            if (job == null || string.IsNullOrWhiteSpace(job.submission_id))
+            {
+                return;
+            }
+
+            EnvForgeJobRecordDto selectedJob = jobHistoryStore.FindJob(job.submission_id) ?? job;
+            StopResultStream("selected job");
+            submissionId = selectedJob.submission_id;
+            activeScenarioId = selectedJob.scenario_id;
+            loadedReplaySummary = !string.IsNullOrWhiteSpace(selectedJob.local_replay_manifest_path)
+                ? $"manifest saved for {Shorten(selectedJob.submission_id, 18)}"
+                : null;
+            latestResult = null;
+            autoDownloadStarted = false;
+            lastResultFetchError = null;
+            consecutiveResultFetchFailures = 0;
+            resultStreamEventCount = 0;
+            lastResultStreamStatus = null;
+            lastResultStreamReceivedAt = null;
+            lastResultStreamError = null;
+            resultStreamErrorReported = false;
+            status = $"Cloud: selected {Shorten(submissionId, 18)}";
+
+            if (reconnect)
+            {
+                StartResultStream();
+                StartCoroutine(FetchLatestResult("library"));
+            }
+        }
+
+        private static string FormatLibraryJobSummary(EnvForgeJobRecordDto job, bool selected)
+        {
+            string marker = selected ? "Current" : "Job";
+            string state = string.IsNullOrWhiteSpace(job.status) ? "unknown" : job.status;
+            string replay = !string.IsNullOrWhiteSpace(job.local_replay_manifest_path) && File.Exists(job.local_replay_manifest_path)
+                ? "replay local"
+                : string.IsNullOrWhiteSpace(job.replay_artifact_path) ? "replay missing" : "replay cloud";
+            string model = !string.IsNullOrWhiteSpace(job.local_onnx_path) && File.Exists(job.local_onnx_path)
+                ? "model local"
+                : string.IsNullOrWhiteSpace(job.onnx_artifact_path) ? "model missing" : "model cloud";
+            string progress = job.progress_total_steps > 0
+                ? $"{FormatSteps(job.progress_current_step)}/{FormatSteps(job.progress_total_steps)}"
+                : FormatSteps(job.training_timesteps);
+            return $"{marker}: {Shorten(job.submission_id, 18)} · {state} · {progress} · {replay} · {model}";
+        }
+
         private void ToggleJobDetails()
         {
             if (string.IsNullOrEmpty(submissionId) && latestResult == null)
@@ -1185,17 +1318,64 @@ namespace EnvForge.Navigation.Cloud
             }
 
             showTrainingSettings = false;
+            showLibraryDetails = false;
             showJobDetails = !showJobDetails;
         }
 
-        private static string FormatArtifactState(ArtifactLocationDto artifact)
+        private void ToggleLibraryDetails()
         {
-            return artifact == null ? "not ready" : "ready";
+            showTrainingSettings = false;
+            showJobDetails = false;
+            showLibraryDetails = !showLibraryDetails;
         }
 
-        private static string FormatModelArtifactState(ResultArtifactsDto artifacts)
+        private void ToggleTrainingSettings()
         {
-            return artifacts?.onnx_model == null ? "not ready" : "ready";
+            showTrainingSettings = !showTrainingSettings;
+            showJobDetails = false;
+            showLibraryDetails = false;
+            SyncTextFromTrainingSettings();
+        }
+
+        private string FormatReplayLoadedSummary()
+        {
+            return string.IsNullOrWhiteSpace(loadedReplaySummary)
+                ? "Replay: not loaded"
+                : $"Replay: {loadedReplaySummary}";
+        }
+
+        private string FormatCloudArtifactSummary()
+        {
+            if (IsCompletedResult())
+            {
+                ResultArtifactsDto artifacts = GetResultArtifacts();
+                string replay = artifacts?.replay_bundle == null ? "replay missing" : "replay available";
+                string model = artifacts?.onnx_model == null ? "model missing" : "model available";
+                return $"Cloud: {replay} · {model}";
+            }
+
+            if (IsTerminalResultStatus(latestResult?.status))
+            {
+                return $"Cloud: {latestResult.status} · artifacts unavailable";
+            }
+
+            return "Cloud: replay waiting · model waiting";
+        }
+
+        private string FormatLocalArtifactSummary()
+        {
+            EnvForgeJobRecordDto activeJob = GetActiveJobRecord();
+            string replay = activeJob != null &&
+                !string.IsNullOrWhiteSpace(activeJob.local_replay_manifest_path) &&
+                File.Exists(activeJob.local_replay_manifest_path)
+                    ? "replay downloaded"
+                    : "replay missing";
+            string model = activeJob != null &&
+                !string.IsNullOrWhiteSpace(activeJob.local_onnx_path) &&
+                File.Exists(activeJob.local_onnx_path)
+                    ? "model downloaded"
+                    : "model missing";
+            return $"Local: {replay} · {model}";
         }
 
         private string FormatHistorySummary()
@@ -1205,56 +1385,58 @@ namespace EnvForge.Navigation.Cloud
                 return "History: none";
             }
 
-            EnvForgeJobRecordDto latestJob = jobHistoryStore.Latest;
-            string replay = string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path) ? "replay -" : "replay manifest";
-            string model = string.IsNullOrWhiteSpace(latestJob.local_onnx_path)
+            EnvForgeJobRecordDto recentJob = jobHistoryStore.MostRecentRecord;
+            string replay = string.IsNullOrWhiteSpace(recentJob.local_replay_manifest_path) ? "replay -" : "replay manifest";
+            string model = string.IsNullOrWhiteSpace(recentJob.local_onnx_path)
                 ? "model -"
                 : "model saved";
-            return $"History: {jobHistoryStore.Jobs.Count} jobs · latest {Shorten(latestJob.submission_id, 18)} · {replay} · {model}";
+            return $"History: {jobHistoryStore.Jobs.Count} jobs · latest {Shorten(recentJob.submission_id, 18)} · {replay} · {model}";
         }
 
         private string FormatInferenceSummary()
         {
             if (inferenceController == null)
             {
-                return "Inference: unavailable";
+                return "AI: unavailable";
             }
 
-            return $"{inferenceController.StatusSummary} · {inferenceController.LastActionSummary}";
+            string state = inferenceController.IsRunning ? "AI: running" : "AI: off";
+            return $"{state} · {inferenceController.LastActionSummary}";
         }
 
         private void ToggleInferenceMode()
         {
             if (inferenceController == null)
             {
-                status = "Inference: controller unavailable";
+                status = "AI: controller unavailable";
                 return;
             }
 
             if (inferenceController.IsRunning)
             {
                 inferenceController.StopInference();
-                status = inferenceController.StatusSummary;
+                status = "AI: off";
                 return;
             }
 
             string modelPath = GetLatestLocalOnnxModelPath();
             if (string.IsNullOrEmpty(modelPath))
             {
-                status = "Inference: download ONNX model first";
+                status = "AI: download model first";
                 showTrainingSettings = false;
                 showJobDetails = true;
+                showLibraryDetails = false;
                 return;
             }
 
             replayPlayer?.ReleaseControl();
             if (inferenceController.StartInference(modelPath, out string error))
             {
-                status = inferenceController.StatusSummary;
+                status = "AI: running";
                 return;
             }
 
-            status = "Inference failed: see Console / Job details";
+            status = "AI failed: see Console / Job details";
             if (!string.IsNullOrWhiteSpace(error))
             {
                 Debug.LogError($"Inference failed: {error}");
@@ -1262,17 +1444,18 @@ namespace EnvForge.Navigation.Cloud
 
             showTrainingSettings = false;
             showJobDetails = true;
+            showLibraryDetails = false;
         }
 
         private string GetLatestLocalOnnxModelPath()
         {
-            EnvForgeJobRecordDto latestJob = jobHistoryStore?.Latest;
-            if (latestJob == null || string.IsNullOrWhiteSpace(latestJob.local_onnx_path))
+            EnvForgeJobRecordDto activeJob = GetActiveJobRecord();
+            if (activeJob == null || string.IsNullOrWhiteSpace(activeJob.local_onnx_path))
             {
                 return string.Empty;
             }
 
-            return latestJob.local_onnx_path;
+            return activeJob.local_onnx_path;
         }
 
         private string FormatProgressSummary()
@@ -1314,6 +1497,127 @@ namespace EnvForge.Navigation.Cloud
             }
 
             return value.Length <= maxLength ? value : value.Substring(0, maxLength) + "...";
+        }
+
+        private EnvForgeJobRecordDto GetActiveJobRecord()
+        {
+            if (jobHistoryStore == null || string.IsNullOrWhiteSpace(submissionId))
+            {
+                return null;
+            }
+
+            return jobHistoryStore.FindJob(submissionId);
+        }
+
+        private static string FormatUserFacingError(string error)
+        {
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                return "unknown";
+            }
+
+            string normalized = error.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            normalized = RedactUrlLikeText(normalized);
+            return Shorten(normalized, 180);
+        }
+
+        private static string RedactUrlLikeText(string value)
+        {
+            string[] tokens = value.Split(' ');
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                if (tokens[i].StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    tokens[i].StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                    tokens[i].StartsWith("gs://", StringComparison.OrdinalIgnoreCase))
+                {
+                    tokens[i] = "[artifact-url]";
+                }
+            }
+
+            return string.Join(" ", tokens);
+        }
+
+        private static string GetSafeSubmissionDirectoryName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return "latest";
+            }
+
+            string trimmed = value.Trim();
+            if (Guid.TryParseExact(trimmed, "D", out _))
+            {
+                return trimmed;
+            }
+
+            char[] chars = value.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                char ch = chars[i];
+                if (!char.IsLetterOrDigit(ch) && ch != '-' && ch != '_')
+                {
+                    chars[i] = '_';
+                }
+            }
+
+            string sanitized = new string(chars);
+            string safePrefix = string.IsNullOrWhiteSpace(sanitized.Trim('_')) ? "submission" : sanitized;
+            return $"{safePrefix}-{ShortHash(value)}";
+        }
+
+        private static string ShortHash(string value)
+        {
+            using SHA256 sha256 = SHA256.Create();
+            byte[] hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty));
+            StringBuilder builder = new(12);
+            for (int i = 0; i < 6 && i < hash.Length; i++)
+            {
+                builder.Append(hash[i].ToString("x2", CultureInfo.InvariantCulture));
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool TryBuildSafeChildPath(string rootDirectory, string relativePath, out string safePath)
+        {
+            safePath = string.Empty;
+            if (string.IsNullOrWhiteSpace(rootDirectory) || string.IsNullOrWhiteSpace(relativePath))
+            {
+                return false;
+            }
+
+            string normalizedRelativePath = relativePath.Replace('\\', '/');
+            if (normalizedRelativePath.StartsWith("/", StringComparison.Ordinal) ||
+                normalizedRelativePath.Contains(":", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            string combined = rootDirectory;
+            string[] parts = normalizedRelativePath.Split('/');
+            foreach (string part in parts)
+            {
+                if (string.IsNullOrWhiteSpace(part) ||
+                    string.Equals(part, ".", StringComparison.Ordinal) ||
+                    string.Equals(part, "..", StringComparison.Ordinal) ||
+                    part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                {
+                    return false;
+                }
+
+                combined = Path.Combine(combined, part);
+            }
+
+            string fullRoot = Path.GetFullPath(rootDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string fullPath = Path.GetFullPath(combined);
+            if (!fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase) &&
+                !fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            safePath = fullPath;
+            return true;
         }
 
         private string BuildResultWebSocketUrl(string resultSubmissionId)
@@ -1513,7 +1817,7 @@ namespace EnvForge.Navigation.Cloud
 
         private IEnumerator LoadLatestReplay()
         {
-            EnvForgeJobRecordDto latestJob = GetLatestLocalReplayJob();
+            EnvForgeJobRecordDto latestJob = GetActiveLocalReplayJob();
             ArtifactLocationDto replayBundle = GetResultArtifacts()?.replay_bundle;
             if (replayBundle == null && !string.IsNullOrWhiteSpace(submissionId))
             {
@@ -1531,7 +1835,7 @@ namespace EnvForge.Navigation.Cloud
                 }
 
                 yield return DownloadReplay();
-                latestJob = GetLatestLocalReplayJob();
+                latestJob = GetActiveLocalReplayJob();
                 manifestPath = latestJob?.local_replay_manifest_path;
             }
 
@@ -1565,17 +1869,17 @@ namespace EnvForge.Navigation.Cloud
             yield return LoadReplayChunkAt(0, false, false);
         }
 
-        private EnvForgeJobRecordDto GetLatestLocalReplayJob()
+        private EnvForgeJobRecordDto GetActiveLocalReplayJob()
         {
-            EnvForgeJobRecordDto latestJob = jobHistoryStore?.Latest;
-            if (latestJob == null ||
-                string.IsNullOrWhiteSpace(latestJob.local_replay_manifest_path) ||
-                !File.Exists(latestJob.local_replay_manifest_path))
+            EnvForgeJobRecordDto activeJob = GetActiveJobRecord();
+            if (activeJob == null ||
+                string.IsNullOrWhiteSpace(activeJob.local_replay_manifest_path) ||
+                !File.Exists(activeJob.local_replay_manifest_path))
             {
                 return null;
             }
 
-            return latestJob;
+            return activeJob;
         }
 
         private string ApplyReplayScenario(EnvForgeJobRecordDto job)
@@ -1683,30 +1987,6 @@ namespace EnvForge.Navigation.Cloud
             return count;
         }
 
-        private static string FormatScenarioSummary(ScenarioBundleDto scenario)
-        {
-            TrainingDto training = scenario?.training;
-            if (training == null)
-            {
-                return string.Empty;
-            }
-
-            return $"{scenario.scenario_id} · {training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed} · envs {training.n_envs}";
-        }
-
-        private string GetVisibleTrainerSummary()
-        {
-            if (!string.IsNullOrEmpty(activeJobTrainerSummary))
-            {
-                return activeJobTrainerSummary;
-            }
-
-            NavigationTrainingSettings settings = sceneBuilder?.TrainingSettings;
-            return settings == null
-                ? "none"
-                : $"ppo · {FormatSteps(settings.Timesteps)} · seed {settings.Seed} · envs {settings.NEnvs} · cpu {settings.CpuCount} · th {settings.TorchNumThreads}";
-        }
-
         private static string FormatScenarioTrainerSummary(ScenarioBundleDto scenario)
         {
             TrainingDto training = scenario?.training;
@@ -1733,7 +2013,6 @@ namespace EnvForge.Navigation.Cloud
         {
             if (buttonStyle != null &&
                 selectedButtonStyle != null &&
-                primaryButtonStyle != null &&
                 labelStyle != null &&
                 statusStyle != null &&
                 detailStyle != null &&
@@ -1777,11 +2056,6 @@ namespace EnvForge.Navigation.Cloud
             selectedButtonStyle.active.textColor = Color.black;
             selectedButtonStyle.focused.textColor = Color.black;
 
-            primaryButtonStyle = new GUIStyle(buttonStyle)
-            {
-                fontSize = PrimaryButtonFontSize,
-            };
-
             labelStyle = new GUIStyle(GUI.skin.label)
             {
                 fontSize = FontSize,
@@ -1789,6 +2063,7 @@ namespace EnvForge.Navigation.Cloud
                 normal = { textColor = Color.white },
                 alignment = TextAnchor.MiddleLeft,
             };
+            FreezeReadOnlyStyle(labelStyle);
 
             statusStyle = new GUIStyle(labelStyle)
             {
@@ -1835,6 +2110,16 @@ namespace EnvForge.Navigation.Cloud
 
             boxStyle = new GUIStyle(GUI.skin.box);
             boxStyle.normal.background = background;
+        }
+
+        private static void FreezeReadOnlyStyle(GUIStyle style)
+        {
+            style.hover.textColor = style.normal.textColor;
+            style.active.textColor = style.normal.textColor;
+            style.focused.textColor = style.normal.textColor;
+            style.hover.background = style.normal.background;
+            style.active.background = style.normal.background;
+            style.focused.background = style.normal.background;
         }
 
         private static Texture2D CreateTexture(Color color)
