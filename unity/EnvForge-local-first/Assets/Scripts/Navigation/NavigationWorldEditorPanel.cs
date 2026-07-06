@@ -19,7 +19,7 @@ namespace EnvForge.Navigation
         }
 
         private const float Padding = 12f;
-        private const float CompactWidth = 520f;
+        private const float CompactWidth = 640f;
         private const float CompactHeight = 112f;
         private const float DetailsWidth = 620f;
         private const float DetailsHeight = 540f;
@@ -34,6 +34,7 @@ namespace EnvForge.Navigation
         private const float BodyPickRadius = 28f;
         private const float HandleInsetMeters = 0.35f;
         private const float OutlineThicknessPixels = 4f;
+        private const float NotificationDurationSeconds = 1.8f;
         private const string TextFieldFocusPrefix = "WorldEditorTextField_";
         private const string MapDirectoryName = "maps";
         private const string MapFileName = "latest-map.json";
@@ -49,6 +50,7 @@ namespace EnvForge.Navigation
         private GUIStyle titleStyle;
         private GUIStyle textFieldStyle;
         private GUIStyle boxStyle;
+        private GUIStyle notificationStyle;
         private Texture2D wallGuideTexture;
         private NavigationReplayPlayer replayPlayer;
         private Vector2 detailsScroll;
@@ -59,6 +61,8 @@ namespace EnvForge.Navigation
         private Vector2 fixedResizeEndpoint;
         private float dragStartRotation;
         private float dragStartPointerAngle;
+        private string notificationMessage;
+        private float notificationUntil;
 
         private string floorWidthText;
         private string floorDepthText;
@@ -91,19 +95,12 @@ namespace EnvForge.Navigation
 
         private void Update()
         {
-            Keyboard keyboard = Keyboard.current;
-            if (keyboard != null && keyboard.f8Key.wasPressedThisFrame)
-            {
-                showPanel = !showPanel;
-            }
-
-            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && showDetails)
-            {
-                showDetails = false;
-                dragMode = WallDragMode.None;
-            }
-
             HandleWorldMouseEditing();
+        }
+
+        private void OnDestroy()
+        {
+            NavigationInputBlocker.UnregisterPanel(nameof(NavigationWorldEditorPanel));
         }
 
         private void OnGUI()
@@ -112,6 +109,7 @@ namespace EnvForge.Navigation
             {
                 lastPanelRect = Rect.zero;
                 IsTextInputFocused = false;
+                NavigationInputBlocker.UnregisterPanel(nameof(NavigationWorldEditorPanel));
                 return;
             }
 
@@ -121,11 +119,15 @@ namespace EnvForge.Navigation
             {
                 DrawDetails();
                 DrawSelectedWallHandles();
+                UpdatePointerOverPanel();
+                DrawNotificationOverlay();
                 return;
             }
 
             DrawCompact();
             DrawSelectedWallHandles();
+            UpdatePointerOverPanel();
+            DrawNotificationOverlay();
         }
 
         private bool IsReplayPanelExpanded()
@@ -149,7 +151,7 @@ namespace EnvForge.Navigation
             GUI.Label(new Rect(content.x, content.y, content.width, 32f), FormatWorldSummary(), labelStyle);
 
             float buttonTop = content.y + 42f;
-            float buttonWidth = (content.width - Padding * 3f) / 4f;
+            float buttonWidth = (content.width - Padding * 4f) / 5f;
             if (GUI.Button(new Rect(content.x, buttonTop, buttonWidth, ButtonHeight), "Edit", compactButtonStyle))
             {
                 showDetails = true;
@@ -163,12 +165,18 @@ namespace EnvForge.Navigation
 
             if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 2f, buttonTop, buttonWidth, ButtonHeight), "Undo", compactButtonStyle))
             {
-                sceneBuilder.RemoveLastUserWall();
-                selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
-                mapStatus = "Map: unsaved changes";
+                RemoveLastWall();
             }
 
-            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 3f, buttonTop, buttonWidth, ButtonHeight), sceneBuilder.NextCameraViewLabel, compactButtonStyle))
+            bool previousEnabled = GUI.enabled;
+            GUI.enabled = previousEnabled && selectedWallIndex >= 0;
+            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 3f, buttonTop, buttonWidth, ButtonHeight), "Delete", compactButtonStyle))
+            {
+                DeleteSelectedWall();
+            }
+
+            GUI.enabled = previousEnabled;
+            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 4f, buttonTop, buttonWidth, ButtonHeight), sceneBuilder.NextCameraViewLabel, compactButtonStyle))
             {
                 sceneBuilder.ToggleCameraView();
             }
@@ -232,34 +240,6 @@ namespace EnvForge.Navigation
             {
                 ApplyStartGoal();
             }
-
-            GUILayout.Space(10f);
-            GUILayout.Label("Wall", titleStyle, GUILayout.Height(FieldHeight));
-            DrawTextField($"x 0..{sceneBuilder.FloorSize.x:0.#}", ref wallXText);
-            DrawTextField($"z 0..{sceneBuilder.FloorSize.y:0.#}", ref wallZText);
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Place Wall", buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                AddWallFromFields();
-            }
-
-            if (GUILayout.Button("Undo", buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                sceneBuilder.RemoveLastUserWall();
-                selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
-                mapStatus = "Map: unsaved changes";
-            }
-
-            if (GUILayout.Button("Clear", buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                sceneBuilder.ClearUserWalls();
-                selectedWallIndex = -1;
-                dragMode = WallDragMode.None;
-                mapStatus = "Map: unsaved changes";
-            }
-
-            GUILayout.EndHorizontal();
             GUILayout.EndScrollView();
             GUILayout.EndArea();
         }
@@ -343,6 +323,26 @@ namespace EnvForge.Navigation
             mapStatus = "Map: unsaved changes";
         }
 
+        private void RemoveLastWall()
+        {
+            sceneBuilder.RemoveLastUserWall();
+            selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
+            dragMode = WallDragMode.None;
+            mapStatus = "Map: unsaved changes";
+        }
+
+        private void DeleteSelectedWall()
+        {
+            if (!sceneBuilder.RemoveUserWall(selectedWallIndex))
+            {
+                return;
+            }
+
+            selectedWallIndex = -1;
+            dragMode = WallDragMode.None;
+            mapStatus = "Map: unsaved changes";
+        }
+
         private void HandleWorldMouseEditing()
         {
             IsPointerEditingWorld = dragMode != WallDragMode.None;
@@ -362,7 +362,7 @@ namespace EnvForge.Navigation
 
             Vector2 screenPosition = mouse.position.ReadValue();
             Vector2 guiPosition = new(screenPosition.x, Screen.height - screenPosition.y);
-            if (lastPanelRect.Contains(guiPosition))
+            if (IsPointerOverAnyUiPanel(guiPosition))
             {
                 if (mouse.leftButton.wasReleasedThisFrame || mouse.rightButton.wasReleasedThisFrame)
                 {
@@ -395,6 +395,11 @@ namespace EnvForge.Navigation
                 }
                 else
                 {
+                    if (TryGetGroundPoint(camera, screenPosition, out _))
+                    {
+                        selectedWallIndex = -1;
+                    }
+
                     dragMode = WallDragMode.None;
                 }
             }
@@ -435,9 +440,7 @@ namespace EnvForge.Navigation
             if (dragMode == WallDragMode.Move && mouse.leftButton.isPressed)
             {
                 Vector2 nextCenter = dragPoint + dragOffset;
-                sceneBuilder.UpdateUserWall(selectedWallIndex, nextCenter, wallSpec.Size.x, wallSpec.RotationYDegrees);
-                SyncSelectedWallCenterText();
-                mapStatus = "Map: unsaved changes";
+                ApplyWallEdit(sceneBuilder.UpdateUserWall(selectedWallIndex, nextCenter, wallSpec.Size.x, wallSpec.RotationYDegrees));
                 return;
             }
 
@@ -445,9 +448,7 @@ namespace EnvForge.Navigation
             {
                 Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
                 float pointerAngle = Mathf.Atan2(dragPoint.y - center.y, dragPoint.x - center.x) * Mathf.Rad2Deg;
-                sceneBuilder.UpdateUserWall(selectedWallIndex, center, wallSpec.Size.x, dragStartRotation + pointerAngle - dragStartPointerAngle);
-                SyncSelectedWallCenterText();
-                mapStatus = "Map: unsaved changes";
+                ApplyWallEdit(sceneBuilder.UpdateUserWall(selectedWallIndex, center, wallSpec.Size.x, dragStartRotation + pointerAngle - dragStartPointerAngle));
                 return;
             }
 
@@ -466,9 +467,45 @@ namespace EnvForge.Navigation
             }
 
             Vector2 centerAfterResize = fixedResizeEndpoint + axis * (signedLength * 0.5f);
-            sceneBuilder.UpdateUserWall(selectedWallIndex, centerAfterResize, Mathf.Abs(signedLength), wallSpec.RotationYDegrees);
+            ApplyWallEdit(sceneBuilder.UpdateUserWall(selectedWallIndex, centerAfterResize, Mathf.Abs(signedLength), wallSpec.RotationYDegrees));
+        }
+
+        private void ApplyWallEdit(bool updated)
+        {
+            if (!updated)
+            {
+                ShowNotification("Wall blocked by robot, goal, or another wall");
+                return;
+            }
+
             SyncSelectedWallCenterText();
             mapStatus = "Map: unsaved changes";
+        }
+
+        private void ShowNotification(string message)
+        {
+            mapStatus = message;
+            notificationMessage = message;
+            notificationUntil = Time.unscaledTime + NotificationDurationSeconds;
+        }
+
+        private void DrawNotificationOverlay()
+        {
+            if (string.IsNullOrWhiteSpace(notificationMessage) || Time.unscaledTime > notificationUntil)
+            {
+                return;
+            }
+
+            float width = Mathf.Min(620f, Screen.width - Padding * 2f);
+            Rect rect = new((Screen.width - width) * 0.5f, Padding, width, 48f);
+            GUI.Box(rect, GUIContent.none, boxStyle);
+            GUI.Label(new Rect(rect.x + Padding, rect.y, rect.width - Padding * 2f, rect.height), notificationMessage, notificationStyle);
+        }
+
+        private bool IsPointerOverAnyUiPanel(Vector2 guiPosition)
+        {
+            return NavigationInputBlocker.IsPointerOverPanel(guiPosition) ||
+                Cloud.EnvForgeCloudRunPanel.IsTextInputFocused;
         }
 
         private bool TryFindWallHandleHit(Vector2 screenPosition, Camera camera, out int wallIndex, out WallDragMode nextDragMode, out Vector2 fixedEndpoint)
@@ -822,11 +859,19 @@ namespace EnvForge.Navigation
                 wordWrap = false,
                 clipping = TextClipping.Clip,
             };
+            FreezeReadOnlyStyle(labelStyle);
 
             titleStyle = new GUIStyle(labelStyle)
             {
                 fontSize = TitleFontSize,
                 fontStyle = FontStyle.Bold,
+            };
+
+            notificationStyle = new GUIStyle(labelStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                wordWrap = true,
             };
 
             textFieldStyle = new GUIStyle(GUI.skin.textField)
@@ -840,6 +885,21 @@ namespace EnvForge.Navigation
             boxStyle = new GUIStyle(GUI.skin.box);
             boxStyle.normal.background = CreateTexture(new Color(0f, 0f, 0f, 0.9f));
             wallGuideTexture = CreateTexture(new Color(1f, 0.72f, 0.12f, 0.85f));
+        }
+
+        private static void FreezeReadOnlyStyle(GUIStyle style)
+        {
+            style.hover.textColor = style.normal.textColor;
+            style.active.textColor = style.normal.textColor;
+            style.focused.textColor = style.normal.textColor;
+            style.hover.background = style.normal.background;
+            style.active.background = style.normal.background;
+            style.focused.background = style.normal.background;
+        }
+
+        private void UpdatePointerOverPanel()
+        {
+            NavigationInputBlocker.RegisterPanel(nameof(NavigationWorldEditorPanel), lastPanelRect);
         }
 
         private static Texture2D CreateTexture(Color color)

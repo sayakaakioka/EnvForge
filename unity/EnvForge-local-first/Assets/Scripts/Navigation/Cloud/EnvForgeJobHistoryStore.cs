@@ -26,7 +26,17 @@ namespace EnvForge.Navigation.Cloud
 
         public IReadOnlyList<EnvForgeJobRecordDto> Jobs => EnsureLoaded().jobs;
 
-        public EnvForgeJobRecordDto Latest => Jobs.Count > 0 ? Jobs[0] : null;
+        public EnvForgeJobRecordDto MostRecentRecord => Jobs.Count > 0 ? Jobs[0] : null;
+
+        public EnvForgeJobRecordDto FindJob(string submissionId)
+        {
+            if (string.IsNullOrWhiteSpace(submissionId))
+            {
+                return null;
+            }
+
+            return EnsureLoaded().jobs.Find(job => job.submission_id == submissionId);
+        }
 
         public EnvForgeJobRecordDto UpsertSubmittedJob(
             string submissionId,
@@ -118,7 +128,17 @@ namespace EnvForge.Navigation.Cloud
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(historyPath, JsonUtility.ToJson(loaded, prettyPrint: true));
+            string json = JsonUtility.ToJson(loaded, prettyPrint: true);
+            string temporaryPath = historyPath + ".tmp";
+            File.WriteAllText(temporaryPath, json);
+            if (File.Exists(historyPath))
+            {
+                File.Replace(temporaryPath, historyPath, null);
+            }
+            else
+            {
+                File.Move(temporaryPath, historyPath);
+            }
         }
 
         private JobHistoryDocument EnsureLoaded()
