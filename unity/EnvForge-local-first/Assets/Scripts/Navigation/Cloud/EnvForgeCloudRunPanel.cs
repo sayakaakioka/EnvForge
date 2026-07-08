@@ -35,7 +35,6 @@ namespace EnvForge.Navigation.Cloud
         private const float SettingsLabelWidth = 300f;
         private const float SettingsColumnLabelWidth = 178f;
         private const float ResultPollIntervalSeconds = 30f;
-        private const string BundledReplayResource = "EnvForge/navigation_default_replay";
         private const string SettingsTextFieldFocusPrefix = "CloudSettingsTextField_";
         private const float DebugOverlayMaxHeight = 420f;
 
@@ -2362,20 +2361,6 @@ namespace EnvForge.Navigation.Cloud
             return GetCurrentSettingsName();
         }
 
-        private void LoadBundledReplay()
-        {
-            TextAsset replayAsset = Resources.Load<TextAsset>(BundledReplayResource);
-            if (replayAsset == null)
-            {
-                status = $"Demo replay not found: Resources/{BundledReplayResource}";
-                return;
-            }
-
-            sceneBuilder?.ResetToDefaultScenario();
-            LoadReplaySteps(ReplayLogSerializer.FromJsonLines(replayAsset.text), "Bundled demo replay", "default scenario");
-            status = "Cloud: demo replay loaded";
-        }
-
         private IEnumerator LoadLatestReplay()
         {
             EnvForgeJobRecordDto latestJob = GetActiveLocalReplayJob();
@@ -2391,13 +2376,18 @@ namespace EnvForge.Navigation.Cloud
             {
                 if (replayBundle == null || !IsCompletedResult())
                 {
-                    LoadBundledReplay();
+                    status = "Replay unavailable: fetch a completed replay first";
                     yield break;
                 }
 
                 yield return DownloadReplay();
                 latestJob = GetActiveLocalReplayJob();
                 manifestPath = latestJob?.local_replay_manifest_path;
+                if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
+                {
+                    status = "Replay download did not produce a local manifest";
+                    yield break;
+                }
             }
 
             bool manifestReady = false;
@@ -2412,8 +2402,7 @@ namespace EnvForge.Navigation.Cloud
             catch (Exception ex)
             {
                 Debug.LogError($"Latest replay load failed: {ex}");
-                status = "Latest replay load failed; loading demo";
-                LoadBundledReplay();
+                status = "Latest replay load failed";
             }
 
             if (!manifestReady)
@@ -2463,12 +2452,6 @@ namespace EnvForge.Navigation.Cloud
             sceneBuilder?.ResetToDefaultScenario();
             sceneBuilder?.RecordScenarioSource("Map: default scenario");
             return "default scenario";
-        }
-
-        private void LoadReplaySteps(IReadOnlyList<ReplayLogStepDto> steps, string source, string scenarioSource)
-        {
-            replayPlayer.LoadSteps(steps);
-            loadedReplaySummary = FormatReplaySummary(steps, source, scenarioSource);
         }
 
         private static List<ReplayLogStepDto> BuildReplayDisplaySteps(IReadOnlyList<ReplayLogStepDto> rawSteps)
