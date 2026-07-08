@@ -20,18 +20,14 @@ namespace EnvForge.Navigation.Inference
         private const int ImageObservationWidth = 112;
         private const int ImageObservationValueCount = ImageObservationChannels * ImageObservationHeight * ImageObservationWidth;
         private const int NumericObservationValueCount = 2;
-        private const int FlatNavigationFinalObservationValueCount = ImageObservationValueCount + NumericObservationValueCount;
+        private const string ImageObservationInputName = "obs_0";
+        private const string NumericObservationInputName = "obs_1";
         private const float TrainingForwardStepMeters = 0.2f;
         private const float TrainingTurnDegreesPerStep = 15f;
         private const float TrainingStepSeconds = 0.1f;
 
-        private readonly float[] observationBuffer = new float[NavigationGoalObservation.ValueCount];
-        private readonly float[] robotBuffer = new float[NavigationGoalObservation.RobotValueCount];
-        private readonly float[] goalBuffer = new float[NavigationGoalObservation.GoalValueCount];
-        private readonly float[] frontDistanceBuffer = new float[NavigationGoalObservation.FrontDistanceValueCount];
         private readonly float[] imageObservationBuffer = new float[ImageObservationValueCount];
         private readonly float[] numericObservationBuffer = new float[NumericObservationValueCount];
-        private readonly float[] flatNavigationFinalObservationBuffer = new float[FlatNavigationFinalObservationValueCount];
 
         private AgentMotor motor;
         private Rigidbody body;
@@ -322,34 +318,21 @@ namespace EnvForge.Navigation.Inference
         private void StepInference()
         {
             if (observationProvider == null ||
-                !observationProvider.TryGetObservation(out NavigationGoalObservation observation) ||
-                !observation.TryWriteTo(observationBuffer))
+                !observationProvider.TryGetObservation(out NavigationGoalObservation observation))
             {
                 motor?.Stop();
                 statusSummary = "Inference: observation unavailable";
                 return;
             }
 
-            observation.TryWriteRobotTo(robotBuffer);
-            observation.TryWriteGoalTo(goalBuffer);
-            observation.TryWriteFrontDistanceTo(frontDistanceBuffer);
             WriteNumericObservation(observation, numericObservationBuffer);
             lastObservationSummary = observation.FormatSummary();
 
-            bool needsImageObservation =
-                RequiresInputSource(ModelInputSource.ImageObservation) ||
-                RequiresInputSource(ModelInputSource.FlatNavigationFinalObservation);
-            if (needsImageObservation &&
-                !TryCaptureImageObservation(imageObservationBuffer))
+            if (!TryCaptureImageObservation(imageObservationBuffer))
             {
                 motor?.Stop();
                 statusSummary = "Inference: image observation unavailable";
                 return;
-            }
-
-            if (RequiresInputSource(ModelInputSource.FlatNavigationFinalObservation))
-            {
-                WriteFlatNavigationFinalObservation();
             }
 
             try
@@ -459,17 +442,9 @@ namespace EnvForge.Navigation.Inference
             List<NamedOnnxValue> inputs = new(inputBindings.Count);
             foreach (ModelInputBinding binding in inputBindings)
             {
-                float[] values = binding.Source switch
-                {
-                    ModelInputSource.Robot => robotBuffer,
-                    ModelInputSource.Goal => goalBuffer,
-                    ModelInputSource.FrontDistance => frontDistanceBuffer,
-                    ModelInputSource.CompactObservation => observationBuffer,
-                    ModelInputSource.ImageObservation => imageObservationBuffer,
-                    ModelInputSource.NumericObservation => numericObservationBuffer,
-                    ModelInputSource.FlatNavigationFinalObservation => flatNavigationFinalObservationBuffer,
-                    _ => observationBuffer,
-                };
+                float[] values = binding.Name == ImageObservationInputName
+                    ? imageObservationBuffer
+                    : numericObservationBuffer;
 
                 DenseTensor<float> tensor = new(binding.Dimensions);
                 for (int i = 0; i < binding.ValueCount; i++)
@@ -501,6 +476,8 @@ namespace EnvForge.Navigation.Inference
             out string error)
         {
             List<ModelInputBinding> bindings = new();
+            bool hasImageObservation = false;
+            bool hasNumericObservation = false;
             foreach (KeyValuePair<string, NodeMetadata> input in modelSession.InputMetadata)
             {
                 if (input.Value.ElementDataType != TensorElementType.Float)
@@ -508,85 +485,45 @@ namespace EnvForge.Navigation.Inference
                     continue;
                 }
 
-                if (TryResolveInputSource(input.Key, input.Value.Dimensions, out ModelInputSource source, out int valueCount) &&
-                    TryResolveInputDimensions(input.Value.Dimensions, valueCount, out int[] dimensions))
+                string normalizedName = input.Key?.Trim() ?? string.Empty;
+                int valueCount;
+                if (normalizedName == ImageObservationInputName)
                 {
-                    bindings.Add(new ModelInputBinding(input.Key, dimensions, valueCount, source));
+                    valueCount = ImageObservationValueCount;
+                    hasImageObservation = true;
                 }
+                else if (normalizedName == NumericObservationInputName)
+                {
+                    valueCount = NumericObservationValueCount;
+                    hasNumericObservation = true;
+                }
+                else
+                {
+                    resolvedInputs = Array.Empty<ModelInputBinding>();
+                    error = $"Unsupported ONNX float input '{input.Key}'. Expected only obs_0 and obs_1.";
+                    return false;
+                }
+
+                if (!TryResolveInputDimensions(input.Value.Dimensions, valueCount, out int[] dimensions))
+                {
+                    resolvedInputs = Array.Empty<ModelInputBinding>();
+                    error = $"Input '{input.Key}' dimensions do not match the current EnvForge policy contract.";
+                    return false;
+                }
+
+                bindings.Add(new ModelInputBinding(normalizedName, dimensions, valueCount));
             }
 
-            if (bindings.Count == 0)
+            if (!hasImageObservation || !hasNumericObservation)
             {
                 resolvedInputs = Array.Empty<ModelInputBinding>();
-                error = "Expected obs_0/obs_1, robot/goal/front_distance, or one compact float observation input.";
+                error = "Expected current EnvForge policy inputs obs_0 (3x84x112 image) and obs_1 (2 numeric values).";
                 return false;
             }
 
             resolvedInputs = bindings;
             error = string.Empty;
             return true;
-        }
-
-        private static bool TryResolveInputSource(
-            string name,
-            int[] dimensions,
-            out ModelInputSource source,
-            out int valueCount)
-        {
-            string normalizedName = name?.Trim().ToLowerInvariant() ?? string.Empty;
-            if (normalizedName == "robot")
-            {
-                source = ModelInputSource.Robot;
-                valueCount = NavigationGoalObservation.RobotValueCount;
-                return true;
-            }
-
-            if (normalizedName == "goal")
-            {
-                source = ModelInputSource.Goal;
-                valueCount = NavigationGoalObservation.GoalValueCount;
-                return true;
-            }
-
-            if (normalizedName == "front_distance")
-            {
-                source = ModelInputSource.FrontDistance;
-                valueCount = NavigationGoalObservation.FrontDistanceValueCount;
-                return true;
-            }
-
-            if (normalizedName == "obs_0")
-            {
-                source = ModelInputSource.ImageObservation;
-                valueCount = ImageObservationValueCount;
-                return true;
-            }
-
-            if (normalizedName == "obs_1")
-            {
-                source = ModelInputSource.NumericObservation;
-                valueCount = NumericObservationValueCount;
-                return true;
-            }
-
-            int product = ProductWithDynamicBatchAsOne(dimensions);
-            if (normalizedName == "observation" && product == FlatNavigationFinalObservationValueCount)
-            {
-                source = ModelInputSource.FlatNavigationFinalObservation;
-                valueCount = FlatNavigationFinalObservationValueCount;
-                return true;
-            }
-
-            if (product == NavigationGoalObservation.ValueCount)
-            {
-                source = ModelInputSource.CompactObservation;
-                valueCount = NavigationGoalObservation.ValueCount;
-                return true;
-            }
-
-            source = ModelInputSource.Unknown;
-            valueCount = 0;
-            return false;
         }
 
         private static bool TryResolveInputDimensions(int[] modelDimensions, int valueCount, out int[] resolvedDimensions)
@@ -658,19 +595,6 @@ namespace EnvForge.Navigation.Inference
             }
 
             return product;
-        }
-
-        private bool RequiresInputSource(ModelInputSource source)
-        {
-            for (int i = 0; i < inputBindings.Count; i++)
-            {
-                if (inputBindings[i].Source == source)
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private void ApplyTrainingMotionProfile()
@@ -809,38 +733,6 @@ namespace EnvForge.Navigation.Inference
             }
         }
 
-        private void WriteFlatNavigationFinalObservation()
-        {
-            Array.Copy(
-                imageObservationBuffer,
-                0,
-                flatNavigationFinalObservationBuffer,
-                0,
-                ImageObservationValueCount);
-            Array.Copy(
-                numericObservationBuffer,
-                0,
-                flatNavigationFinalObservationBuffer,
-                ImageObservationValueCount,
-                NumericObservationValueCount);
-        }
-
-        private static int ProductWithDynamicBatchAsOne(int[] values)
-        {
-            if (values == null || values.Length == 0)
-            {
-                return 0;
-            }
-
-            int product = 1;
-            for (int i = 0; i < values.Length; i++)
-            {
-                product *= Mathf.Max(1, values[i]);
-            }
-
-            return product;
-        }
-
         private void LogInferenceError(string message)
         {
             if (!string.IsNullOrWhiteSpace(message))
@@ -857,26 +749,13 @@ namespace EnvForge.Navigation.Inference
             inputBindings = Array.Empty<ModelInputBinding>();
         }
 
-        private enum ModelInputSource
-        {
-            Unknown,
-            CompactObservation,
-            Robot,
-            Goal,
-            FrontDistance,
-            ImageObservation,
-            NumericObservation,
-            FlatNavigationFinalObservation,
-        }
-
         private readonly struct ModelInputBinding
         {
-            public ModelInputBinding(string name, int[] dimensions, int valueCount, ModelInputSource source)
+            public ModelInputBinding(string name, int[] dimensions, int valueCount)
             {
                 Name = name;
                 Dimensions = dimensions;
                 ValueCount = valueCount;
-                Source = source;
             }
 
             public string Name { get; }
@@ -884,8 +763,6 @@ namespace EnvForge.Navigation.Inference
             public int[] Dimensions { get; }
 
             public int ValueCount { get; }
-
-            public ModelInputSource Source { get; }
         }
     }
 }
