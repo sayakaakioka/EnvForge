@@ -6,6 +6,14 @@ namespace EnvForge.Navigation
     public static class NavigationInputBlocker
     {
         private static readonly Dictionary<string, Rect> PanelRects = new();
+        private static int textInputFocusFrame = -1000;
+        private static string focusedTextInputControl = string.Empty;
+
+        public static bool ShouldBlockWorldKeyboardInput =>
+            Time.frameCount - textInputFocusFrame <= 1;
+
+        public static string FocusedTextInputControl =>
+            ShouldBlockWorldKeyboardInput ? focusedTextInputControl : string.Empty;
 
         public static void RegisterPanel(string key, Rect rect)
         {
@@ -42,6 +50,21 @@ namespace EnvForge.Navigation
             }
 
             return false;
+        }
+
+        public static bool RegisterTextInputFocus(string controlPrefix)
+        {
+            string focusedControl = GUI.GetNameOfFocusedControl();
+            bool focused = !string.IsNullOrEmpty(focusedControl) &&
+                !string.IsNullOrEmpty(controlPrefix) &&
+                focusedControl.StartsWith(controlPrefix, System.StringComparison.Ordinal);
+            if (focused)
+            {
+                textInputFocusFrame = Time.frameCount;
+                focusedTextInputControl = focusedControl;
+            }
+
+            return focused;
         }
     }
 }

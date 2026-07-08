@@ -1,5 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
@@ -15,7 +18,6 @@ namespace EnvForge.Navigation
             Move,
             ResizeNegative,
             ResizePositive,
-            Rotate,
         }
 
         private const float Padding = 12f;
@@ -38,7 +40,9 @@ namespace EnvForge.Navigation
         private const string TextFieldFocusPrefix = "WorldEditorTextField_";
         private const string MapDirectoryName = "maps";
         private const string MapFileName = "latest-map.json";
+        private const string MapHistoryFileName = "map-history.json";
         private const string SavedMapScenarioId = "navigation_saved_map";
+        private const float RotationStepDegrees = 15f;
 
         private NavigationSceneBuilder sceneBuilder;
         private bool showPanel = true;
@@ -59,10 +63,9 @@ namespace EnvForge.Navigation
         private WallDragMode dragMode;
         private Vector2 dragOffset;
         private Vector2 fixedResizeEndpoint;
-        private float dragStartRotation;
-        private float dragStartPointerAngle;
         private string notificationMessage;
         private float notificationUntil;
+        private string pendingDeleteMapPath;
 
         private string floorWidthText;
         private string floorDepthText;
@@ -72,11 +75,11 @@ namespace EnvForge.Navigation
         private string startZText = "0";
         private string goalXText = "0";
         private string goalZText = "0";
+        private string wallAngleText = "0";
+        private string mapNameText = "Map";
         private string mapStatus = "Map: not saved";
 
         public static bool IsPointerEditingWorld { get; private set; }
-
-        public static bool IsTextInputFocused { get; private set; }
 
         public bool IsExpandedPanelOpen => showPanel && showDetails;
 
@@ -108,13 +111,11 @@ namespace EnvForge.Navigation
             if (!showPanel || sceneBuilder == null || IsReplayPanelExpanded())
             {
                 lastPanelRect = Rect.zero;
-                IsTextInputFocused = false;
                 NavigationInputBlocker.UnregisterPanel(nameof(NavigationWorldEditorPanel));
                 return;
             }
 
             EnsureStyles();
-            IsTextInputFocused = false;
             if (showDetails)
             {
                 DrawDetails();
@@ -151,14 +152,14 @@ namespace EnvForge.Navigation
             GUI.Label(new Rect(content.x, content.y, content.width, 32f), FormatWorldSummary(), labelStyle);
 
             float buttonTop = content.y + 42f;
-            float buttonWidth = (content.width - Padding * 4f) / 5f;
+            float buttonWidth = (content.width - Padding * 5f) / 6f;
             if (GUI.Button(new Rect(content.x, buttonTop, buttonWidth, ButtonHeight), "Edit", compactButtonStyle))
             {
                 showDetails = true;
                 SyncTextFromScene();
             }
 
-            if (GUI.Button(new Rect(content.x + buttonWidth + Padding, buttonTop, buttonWidth, ButtonHeight), "Place Wall", compactButtonStyle))
+            if (GUI.Button(new Rect(content.x + buttonWidth + Padding, buttonTop, buttonWidth, ButtonHeight), "Wall", compactButtonStyle))
             {
                 AddWallFromFields();
             }
@@ -175,8 +176,13 @@ namespace EnvForge.Navigation
                 DeleteSelectedWall();
             }
 
+            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 4f, buttonTop, buttonWidth, ButtonHeight), "Rot", compactButtonStyle))
+            {
+                RotateSelectedWallBy(RotationStepDegrees);
+            }
+
             GUI.enabled = previousEnabled;
-            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 4f, buttonTop, buttonWidth, ButtonHeight), sceneBuilder.NextCameraViewLabel, compactButtonStyle))
+            if (GUI.Button(new Rect(content.x + (buttonWidth + Padding) * 5f, buttonTop, buttonWidth, ButtonHeight), sceneBuilder.NextCameraViewLabel, compactButtonStyle))
             {
                 sceneBuilder.ToggleCameraView();
             }
@@ -216,19 +222,20 @@ namespace EnvForge.Navigation
 
             GUILayout.Space(10f);
             GUILayout.Label("Map", titleStyle, GUILayout.Height(FieldHeight));
+            DrawTextField("map name", ref mapNameText);
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Save Map", buttonStyle, GUILayout.Height(ButtonHeight)))
             {
                 SaveMap();
             }
 
-            if (GUILayout.Button("Load Map", buttonStyle, GUILayout.Height(ButtonHeight)))
-            {
-                LoadMap();
-            }
-
             GUILayout.EndHorizontal();
             GUILayout.Label(mapStatus, labelStyle, GUILayout.Height(FieldHeight));
+            DrawSavedMapList();
+
+            GUILayout.Space(10f);
+            GUILayout.Label("Selected Wall", titleStyle, GUILayout.Height(FieldHeight));
+            DrawSelectedWallAngleControls();
 
             GUILayout.Space(10f);
             GUILayout.Label("Start / Goal", titleStyle, GUILayout.Height(FieldHeight));
@@ -250,8 +257,87 @@ namespace EnvForge.Navigation
             GUILayout.Label(label, labelStyle, GUILayout.Width(LabelWidth), GUILayout.Height(FieldHeight));
             GUI.SetNextControlName(TextFieldFocusPrefix + label);
             text = GUILayout.TextField(text, textFieldStyle, GUILayout.Height(FieldHeight));
-            IsTextInputFocused = GUI.GetNameOfFocusedControl().StartsWith(TextFieldFocusPrefix);
+            NavigationInputBlocker.RegisterTextInputFocus(TextFieldFocusPrefix);
             GUILayout.EndHorizontal();
+        }
+
+        private void DrawSavedMapList()
+        {
+            List<MapRecordDto> maps = LoadMapHistory().maps;
+            if (maps.Count == 0)
+            {
+                GUILayout.Label("Saved maps: none", labelStyle, GUILayout.Height(FieldHeight));
+                return;
+            }
+
+            GUILayout.Label($"Saved maps: {maps.Count}", labelStyle, GUILayout.Height(FieldHeight));
+            for (int i = 0; i < maps.Count; i++)
+            {
+                MapRecordDto map = maps[i];
+                if (map == null || string.IsNullOrWhiteSpace(map.path))
+                {
+                    continue;
+                }
+
+                GUILayout.Label(FormatMapRecord(map), labelStyle, GUILayout.Height(FieldHeight));
+                GUILayout.BeginHorizontal();
+                bool exists = TryResolveSafeMapPath(map.path, out string safePath) && File.Exists(safePath);
+                bool previousEnabled = GUI.enabled;
+                GUI.enabled = previousEnabled && exists;
+                if (GUILayout.Button("Load", buttonStyle, GUILayout.Height(ButtonHeight)))
+                {
+                    LoadMapFromPath(map.path, string.IsNullOrWhiteSpace(map.display_name) ? Path.GetFileName(map.path) : map.display_name);
+                }
+
+                GUI.enabled = previousEnabled && exists;
+                string deleteLabel = string.Equals(pendingDeleteMapPath, map.path, StringComparison.Ordinal)
+                    ? "Confirm"
+                    : "Delete";
+                if (GUILayout.Button(deleteLabel, buttonStyle, GUILayout.Height(ButtonHeight)))
+                {
+                    DeleteSavedMap(map.path);
+                }
+
+                GUI.enabled = previousEnabled;
+                GUILayout.EndHorizontal();
+                GUILayout.Space(4f);
+            }
+        }
+
+        private void DrawSelectedWallAngleControls()
+        {
+            bool hasWall = sceneBuilder.TryGetUserWall(selectedWallIndex, out NavigationScenarioWallSpec wallSpec);
+            if (!hasWall)
+            {
+                GUILayout.Label("No wall selected", labelStyle, GUILayout.Height(FieldHeight));
+                return;
+            }
+
+            GUILayout.Label($"Angle: {NormalizeAngle(wallSpec.RotationYDegrees):0.#} deg", labelStyle, GUILayout.Height(FieldHeight));
+            float nextAngle = GUILayout.HorizontalSlider(NormalizeAngle(wallSpec.RotationYDegrees), -180f, 180f, GUILayout.Height(FieldHeight));
+            if (Mathf.Abs(Mathf.DeltaAngle(wallSpec.RotationYDegrees, nextAngle)) >= 0.25f)
+            {
+                SetSelectedWallAngle(nextAngle);
+            }
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("-15", buttonStyle, GUILayout.Height(ButtonHeight)))
+            {
+                RotateSelectedWallBy(-RotationStepDegrees);
+            }
+
+            if (GUILayout.Button("+15", buttonStyle, GUILayout.Height(ButtonHeight)))
+            {
+                RotateSelectedWallBy(RotationStepDegrees);
+            }
+
+            if (GUILayout.Button("Apply", buttonStyle, GUILayout.Height(ButtonHeight)))
+            {
+                ApplySelectedWallAngleText();
+            }
+
+            GUILayout.EndHorizontal();
+            DrawTextField("angle deg", ref wallAngleText);
         }
 
         private string FormatWorldSummary()
@@ -275,6 +361,11 @@ namespace EnvForge.Navigation
             {
                 wallXText = (size.x * 0.5f).ToString("0.###", CultureInfo.InvariantCulture);
                 wallZText = (size.y * 0.5f).ToString("0.###", CultureInfo.InvariantCulture);
+                wallAngleText = "0";
+            }
+            else
+            {
+                SyncSelectedWallAngleText();
             }
         }
 
@@ -319,6 +410,7 @@ namespace EnvForge.Navigation
 
             selectedWallIndex = sceneBuilder.AddDefaultUserWall(UiToWorldWallCenter(new Vector2(x, z)));
             SyncSelectedWallCenterText();
+            SyncSelectedWallAngleText();
             dragMode = WallDragMode.None;
             mapStatus = "Map: unsaved changes";
         }
@@ -327,6 +419,7 @@ namespace EnvForge.Navigation
         {
             sceneBuilder.RemoveLastUserWall();
             selectedWallIndex = Mathf.Min(selectedWallIndex, sceneBuilder.UserWallCount - 1);
+            SyncSelectedWallAngleText();
             dragMode = WallDragMode.None;
             mapStatus = "Map: unsaved changes";
         }
@@ -339,8 +432,25 @@ namespace EnvForge.Navigation
             }
 
             selectedWallIndex = -1;
+            SyncSelectedWallAngleText();
             dragMode = WallDragMode.None;
             mapStatus = "Map: unsaved changes";
+        }
+
+        private void RotateSelectedWallBy(float deltaDegrees)
+        {
+            if (!sceneBuilder.TryGetUserWall(selectedWallIndex, out NavigationScenarioWallSpec wallSpec))
+            {
+                return;
+            }
+
+            Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
+            ApplyWallEdit(sceneBuilder.UpdateUserWall(
+                selectedWallIndex,
+                center,
+                wallSpec.Size.x,
+                NormalizeAngle(wallSpec.RotationYDegrees + deltaDegrees)));
+            SyncSelectedWallAngleText();
         }
 
         private void HandleWorldMouseEditing()
@@ -364,7 +474,7 @@ namespace EnvForge.Navigation
             Vector2 guiPosition = new(screenPosition.x, Screen.height - screenPosition.y);
             if (IsPointerOverAnyUiPanel(guiPosition))
             {
-                if (mouse.leftButton.wasReleasedThisFrame || mouse.rightButton.wasReleasedThisFrame)
+                if (mouse.leftButton.wasReleasedThisFrame)
                 {
                     dragMode = WallDragMode.None;
                     IsPointerEditingWorld = false;
@@ -379,6 +489,7 @@ namespace EnvForge.Navigation
                 if (TryFindWallHandleHit(screenPosition, camera, out int wallIndex, out WallDragMode nextDragMode, out Vector2 fixedEndpoint))
                 {
                     selectedWallIndex = wallIndex;
+                    SyncSelectedWallAngleText();
                     dragMode = nextDragMode;
                     dragOffset = Vector2.zero;
                     fixedResizeEndpoint = fixedEndpoint;
@@ -388,6 +499,7 @@ namespace EnvForge.Navigation
                     TryGetGroundPoint(camera, screenPosition, out Vector3 moveStartPoint))
                 {
                     selectedWallIndex = wallIndex;
+                    SyncSelectedWallAngleText();
                     dragMode = WallDragMode.Move;
                     Vector2 center = new(moveWallSpec.Center.x, moveWallSpec.Center.z);
                     Vector2 groundPoint = new(moveStartPoint.x, moveStartPoint.z);
@@ -398,31 +510,14 @@ namespace EnvForge.Navigation
                     if (TryGetGroundPoint(camera, screenPosition, out _))
                     {
                         selectedWallIndex = -1;
+                        SyncSelectedWallAngleText();
                     }
 
                     dragMode = WallDragMode.None;
                 }
             }
 
-            if (mouse.rightButton.wasPressedThisFrame &&
-                (TryFindWallBodyHit(screenPosition, camera, out int rotateWallIndex) || sceneBuilder.TryRaycastUserWall(pointerRay, out rotateWallIndex)) &&
-                sceneBuilder.TryGetUserWall(rotateWallIndex, out NavigationScenarioWallSpec rotateWallSpec) &&
-                TryGetGroundPoint(camera, screenPosition, out Vector3 rotateStartPoint))
-            {
-                Vector2 groundPoint = new(rotateStartPoint.x, rotateStartPoint.z);
-                selectedWallIndex = rotateWallIndex;
-                dragMode = WallDragMode.Rotate;
-                Vector2 center = new(rotateWallSpec.Center.x, rotateWallSpec.Center.z);
-                dragStartRotation = rotateWallSpec.RotationYDegrees;
-                dragStartPointerAngle = Mathf.Atan2(groundPoint.y - center.y, groundPoint.x - center.x) * Mathf.Rad2Deg;
-            }
-
             if (mouse.leftButton.wasReleasedThisFrame)
-            {
-                dragMode = WallDragMode.None;
-            }
-
-            if (mouse.rightButton.wasReleasedThisFrame && dragMode == WallDragMode.Rotate)
             {
                 dragMode = WallDragMode.None;
             }
@@ -441,14 +536,6 @@ namespace EnvForge.Navigation
             {
                 Vector2 nextCenter = dragPoint + dragOffset;
                 ApplyWallEdit(sceneBuilder.UpdateUserWall(selectedWallIndex, nextCenter, wallSpec.Size.x, wallSpec.RotationYDegrees));
-                return;
-            }
-
-            if (dragMode == WallDragMode.Rotate && mouse.rightButton.isPressed)
-            {
-                Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
-                float pointerAngle = Mathf.Atan2(dragPoint.y - center.y, dragPoint.x - center.x) * Mathf.Rad2Deg;
-                ApplyWallEdit(sceneBuilder.UpdateUserWall(selectedWallIndex, center, wallSpec.Size.x, dragStartRotation + pointerAngle - dragStartPointerAngle));
                 return;
             }
 
@@ -479,6 +566,7 @@ namespace EnvForge.Navigation
             }
 
             SyncSelectedWallCenterText();
+            SyncSelectedWallAngleText();
             mapStatus = "Map: unsaved changes";
         }
 
@@ -505,7 +593,7 @@ namespace EnvForge.Navigation
         private bool IsPointerOverAnyUiPanel(Vector2 guiPosition)
         {
             return NavigationInputBlocker.IsPointerOverPanel(guiPosition) ||
-                Cloud.EnvForgeCloudRunPanel.IsTextInputFocused;
+                NavigationInputBlocker.ShouldBlockWorldKeyboardInput;
         }
 
         private bool TryFindWallHandleHit(Vector2 screenPosition, Camera camera, out int wallIndex, out WallDragMode nextDragMode, out Vector2 fixedEndpoint)
@@ -629,6 +717,36 @@ namespace EnvForge.Navigation
             wallZText = uiCenter.y.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
+        private void SyncSelectedWallAngleText()
+        {
+            if (!sceneBuilder.TryGetUserWall(selectedWallIndex, out NavigationScenarioWallSpec wallSpec))
+            {
+                wallAngleText = "0";
+                return;
+            }
+
+            wallAngleText = NormalizeAngle(wallSpec.RotationYDegrees).ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private void ApplySelectedWallAngleText()
+        {
+            if (TryParse(wallAngleText, out float angle))
+            {
+                SetSelectedWallAngle(angle);
+            }
+        }
+
+        private void SetSelectedWallAngle(float angle)
+        {
+            if (!sceneBuilder.TryGetUserWall(selectedWallIndex, out NavigationScenarioWallSpec wallSpec))
+            {
+                return;
+            }
+
+            Vector2 center = new(wallSpec.Center.x, wallSpec.Center.z);
+            ApplyWallEdit(sceneBuilder.UpdateUserWall(selectedWallIndex, center, wallSpec.Size.x, NormalizeAngle(angle)));
+        }
+
         private Vector2 UiToWorldWallCenter(Vector2 uiCenter)
         {
             return UiToWorldPoint(uiCenter);
@@ -688,6 +806,11 @@ namespace EnvForge.Navigation
         {
             float radians = -rotationYDegrees * Mathf.Deg2Rad;
             return new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
+        }
+
+        private static float NormalizeAngle(float rotationYDegrees)
+        {
+            return Mathf.DeltaAngle(0f, rotationYDegrees);
         }
 
         private static Vector2 GetResizeHandlePoint(Vector2 center, Vector2 axis, float wallLength, bool negativeSide)
@@ -755,8 +878,15 @@ namespace EnvForge.Navigation
             {
                 string directory = GetMapDirectory();
                 Directory.CreateDirectory(directory);
-                File.WriteAllText(GetMapPath(), sceneBuilder.BuildScenarioBundleJson(SavedMapScenarioId));
-                mapStatus = "Map: saved latest-map.json";
+                string json = sceneBuilder.BuildScenarioBundleJson(SavedMapScenarioId);
+                File.WriteAllText(GetMapPath(), json);
+
+                string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                string historyPath = Path.Combine(directory, $"map-{timestamp}.json");
+                File.WriteAllText(historyPath, json);
+                UpsertMapHistory(historyPath, GetCurrentMapDisplayName(timestamp));
+                pendingDeleteMapPath = null;
+                mapStatus = $"Map: saved {GetCurrentMapDisplayName(timestamp)}";
             }
             catch (IOException exception)
             {
@@ -770,10 +900,16 @@ namespace EnvForge.Navigation
             }
         }
 
-        private void LoadMap()
+        private void LoadMapFromPath(string path, string displayName)
         {
-            string path = GetMapPath();
-            if (!File.Exists(path))
+            if (!TryResolveSafeMapPath(path, out string safePath))
+            {
+                RemoveMapHistory(path);
+                mapStatus = "Map: removed unsafe history entry";
+                return;
+            }
+
+            if (!File.Exists(safePath))
             {
                 mapStatus = "Map: no saved map";
                 return;
@@ -781,13 +917,15 @@ namespace EnvForge.Navigation
 
             try
             {
-                ScenarioBundleDto scenario = ScenarioBundleSerializer.FromScenarioBundleJson(File.ReadAllText(path));
+                ScenarioBundleDto scenario = ScenarioBundleSerializer.FromScenarioBundleJson(File.ReadAllText(safePath));
                 sceneBuilder.ApplyScenarioBundle(scenario);
+                sceneBuilder.RecordScenarioSource($"Map: loaded {displayName}");
                 selectedWallIndex = sceneBuilder.UserWallCount > 0 ? sceneBuilder.UserWallCount - 1 : -1;
                 dragMode = WallDragMode.None;
                 SyncTextFromScene();
                 SyncSelectedWallCenterText();
-                mapStatus = "Map: loaded latest-map.json";
+                mapNameText = Path.GetFileNameWithoutExtension(displayName);
+                mapStatus = $"Map: loaded {displayName}";
             }
             catch (IOException exception)
             {
@@ -801,6 +939,132 @@ namespace EnvForge.Navigation
             }
         }
 
+        private void DeleteSavedMap(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            if (!TryResolveSafeMapPath(path, out string safePath))
+            {
+                RemoveMapHistory(path);
+                pendingDeleteMapPath = null;
+                mapStatus = "Map: removed unsafe history entry";
+                return;
+            }
+
+            if (!string.Equals(pendingDeleteMapPath, path, StringComparison.Ordinal))
+            {
+                pendingDeleteMapPath = path;
+                mapStatus = $"Map: confirm delete {Path.GetFileName(safePath)}";
+                return;
+            }
+
+            try
+            {
+                if (File.Exists(safePath))
+                {
+                    File.Delete(safePath);
+                }
+
+                RemoveMapHistory(path);
+                pendingDeleteMapPath = null;
+                mapStatus = $"Map: deleted {Path.GetFileName(safePath)}";
+            }
+            catch (IOException exception)
+            {
+                mapStatus = "Map: delete failed";
+                Debug.LogError($"Map delete failed: {exception.Message}");
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                mapStatus = "Map: delete failed";
+                Debug.LogError($"Map delete failed: {exception.Message}");
+            }
+        }
+
+        private static string FormatMapRecord(MapRecordDto map)
+        {
+            string name = string.IsNullOrWhiteSpace(map.display_name)
+                ? Path.GetFileName(map.path)
+                : map.display_name;
+            string saved = string.IsNullOrWhiteSpace(map.saved_at_local) ? "unknown time" : map.saved_at_local;
+            string missing = TryResolveSafeMapPath(map.path, out string safePath) && File.Exists(safePath) ? string.Empty : " · missing";
+            return $"{name} · {saved}{missing}";
+        }
+
+        private string GetCurrentMapDisplayName(string fallback)
+        {
+            return string.IsNullOrWhiteSpace(mapNameText) ? $"Map {fallback}" : mapNameText.Trim();
+        }
+
+        private static void UpsertMapHistory(string path, string displayName)
+        {
+            if (!TryResolveSafeMapPath(path, out string safePath))
+            {
+                return;
+            }
+
+            MapHistoryDocument document = LoadMapHistory();
+            document.maps.RemoveAll(map => string.Equals(map?.path, safePath, StringComparison.Ordinal));
+            document.maps.Insert(0, new MapRecordDto
+            {
+                path = safePath,
+                display_name = string.IsNullOrWhiteSpace(displayName) ? Path.GetFileName(safePath) : displayName.Trim(),
+                saved_at_local = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            });
+            SaveMapHistory(document);
+        }
+
+        private static void RemoveMapHistory(string path)
+        {
+            MapHistoryDocument document = LoadMapHistory();
+            document.maps.RemoveAll(map => string.Equals(map?.path, path, StringComparison.Ordinal));
+            SaveMapHistory(document);
+        }
+
+        private static MapHistoryDocument LoadMapHistory()
+        {
+            string path = GetMapHistoryPath();
+            if (!File.Exists(path))
+            {
+                return new MapHistoryDocument();
+            }
+
+            try
+            {
+                MapHistoryDocument document = JsonUtility.FromJson<MapHistoryDocument>(File.ReadAllText(path)) ?? new MapHistoryDocument();
+                if (document.maps == null)
+                {
+                    document.maps = new List<MapRecordDto>();
+                }
+
+                document.maps = document.maps
+                    .Where(map => map != null && TryResolveSafeMapPath(map.path, out _))
+                    .ToList();
+                return document;
+            }
+            catch (ArgumentException)
+            {
+                return new MapHistoryDocument();
+            }
+            catch (IOException)
+            {
+                return new MapHistoryDocument();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return new MapHistoryDocument();
+            }
+        }
+
+        private static void SaveMapHistory(MapHistoryDocument document)
+        {
+            Directory.CreateDirectory(GetMapDirectory());
+            File.WriteAllText(GetMapHistoryPath(), JsonUtility.ToJson(document ?? new MapHistoryDocument(), prettyPrint: true));
+        }
+
         private static string GetMapDirectory()
         {
             return Path.Combine(Application.persistentDataPath, "EnvForge", MapDirectoryName);
@@ -809,6 +1073,59 @@ namespace EnvForge.Navigation
         private static string GetMapPath()
         {
             return Path.Combine(GetMapDirectory(), MapFileName);
+        }
+
+        private static string GetMapHistoryPath()
+        {
+            return Path.Combine(GetMapDirectory(), MapHistoryFileName);
+        }
+
+        private static bool TryResolveSafeMapPath(string path, out string safePath)
+        {
+            safePath = string.Empty;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                string root = Path.GetFullPath(GetMapDirectory())
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string fullPath = Path.GetFullPath(path);
+                bool isUnderRoot = fullPath.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+                    fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                    fullPath.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                if (!isUnderRoot || !string.Equals(Path.GetExtension(fullPath), ".json", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                safePath = fullPath;
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+            catch (NotSupportedException)
+            {
+                return false;
+            }
+        }
+
+        [Serializable]
+        private sealed class MapHistoryDocument
+        {
+            public List<MapRecordDto> maps = new();
+        }
+
+        [Serializable]
+        private sealed class MapRecordDto
+        {
+            public string path;
+            public string display_name;
+            public string saved_at_local;
         }
 
         private static bool TryParse(string text, out float value)

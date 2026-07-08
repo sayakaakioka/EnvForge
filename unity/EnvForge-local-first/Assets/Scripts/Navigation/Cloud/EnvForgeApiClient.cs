@@ -22,6 +22,13 @@ namespace EnvForge.Navigation.Cloud
             this.baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? "http://localhost:8000" : baseUrl;
         }
 
+        public string BaseUrl => baseUrl;
+
+        public string BuildResultUrl(string submissionId)
+        {
+            return BuildUrl($"results/{Uri.EscapeDataString(submissionId ?? string.Empty)}");
+        }
+
         public IEnumerator SubmitScenario(
             ScenarioBundleDto scenario,
             Action<SubmissionResponseDto> onSuccess,

@@ -47,6 +47,8 @@ namespace EnvForge.Navigation
         private Material blockedRuntimeMaterial;
         private INavigationEpisodeEvents episodeEvents;
         private NavigationEpisodeEventHub episodeEventHub;
+        private NavigationMetrics navigationMetrics;
+        private GoalReachChecker goalReachChecker;
         private NavigationGoalObservationProvider policyObservationProvider;
         private NavigationCameraController cameraController;
         private Transform agentTransform;
@@ -55,6 +57,9 @@ namespace EnvForge.Navigation
         private Vector3 agentStartPosition = NavigationScenarioBundleDefaults.AgentStartPosition;
         private Quaternion agentStartRotation = NavigationScenarioBundleDefaults.AgentStartRotation;
         private Vector3 goalStartPosition = NavigationScenarioBundleDefaults.GoalStartPosition;
+        private readonly List<Vector3> recentRuntimeStartPositions = new();
+        private Vector3? lastRuntimeStartPosition;
+        private int runtimeStartSerial;
         private int nextWallId = 1;
 
         public NavigationTrainingSettings TrainingSettings => trainingSettings;
@@ -74,6 +79,10 @@ namespace EnvForge.Navigation
         public Vector3 AgentStartPosition => agentStartPosition;
 
         public Vector3 GoalStartPosition => goalStartPosition;
+
+        public string LastRuntimeStartSummary { get; private set; } = "start -";
+
+        public string CurrentScenarioSourceSummary { get; private set; } = "Map: current editor";
 
         public string NextCameraViewLabel => cameraController == null ? "Top" : cameraController.NextViewModeLabel;
 
@@ -116,6 +125,7 @@ namespace EnvForge.Navigation
         public void ResetToDefaultScenario()
         {
             ApplyScenarioBundle(NavigationScenarioBundleBuilder.Build(NavigationScenarioBundleDefaults.CreateSource()));
+            RecordScenarioSource("Map: default scenario");
         }
 
         public void ApplyScenarioBundle(ScenarioBundleDto scenario)
@@ -160,6 +170,14 @@ namespace EnvForge.Navigation
 
             ApplyUserWallsFromScenario(scenario);
             nextWallId = userWalls.Count + 1;
+            ConfigureRuntimeScenarioContracts();
+        }
+
+        public void RecordScenarioSource(string source)
+        {
+            CurrentScenarioSourceSummary = string.IsNullOrWhiteSpace(source)
+                ? "Map: current editor"
+                : source;
         }
 
         private void Start()
@@ -182,20 +200,21 @@ namespace EnvForge.Navigation
             EnvForgeCloudRunPanel cloudRunPanel = gameObject.AddComponent<EnvForgeCloudRunPanel>();
             cloudRunPanel.enabled = showCloudRunPanel;
 
-            NavigationMetrics metrics = gameObject.AddComponent<NavigationMetrics>();
-            metrics.Configure(agent.transform, goal.transform);
+            navigationMetrics = gameObject.AddComponent<NavigationMetrics>();
+            navigationMetrics.Configure(agent.transform, goal.transform);
 
             liveController = agent.GetComponent<NavigationLiveController>();
             episodeEventHub = gameObject.AddComponent<NavigationEpisodeEventHub>();
             episodeEventHub.Configure(liveController);
             episodeEvents = episodeEventHub;
             policyObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
-            policyObservationProvider.Configure(metrics, floorSize.magnitude, goalReachRadius);
+            ConfigureRuntimeScenarioContracts();
             NavigationModelInferenceController inferenceController = agent.GetComponent<NavigationModelInferenceController>();
             inferenceController.Configure(
                 agent.GetComponent<AgentMotor>(),
                 agent.GetComponent<Rigidbody>(),
                 liveController,
+                episodeEventHub,
                 policyObservationProvider);
             cloudRunPanel.Configure(this, replayPlayer, inferenceController, apiSettings, apiBaseUrl, webSocketUrlTemplate);
 
@@ -203,8 +222,8 @@ namespace EnvForge.Navigation
             NavigationWorldEditorPanel worldEditorPanel = gameObject.AddComponent<NavigationWorldEditorPanel>();
             worldEditorPanel.Configure(this);
 
-            GoalReachChecker goalReachChecker = gameObject.AddComponent<GoalReachChecker>();
-            goalReachChecker.Configure(episodeEvents, metrics, goalReachRadius);
+            goalReachChecker = gameObject.AddComponent<GoalReachChecker>();
+            ConfigureRuntimeScenarioContracts();
 
             PositionCamera();
         }
@@ -438,8 +457,14 @@ namespace EnvForge.Navigation
             RebuildBoundaryWalls();
             RefitUserWallsToFloor();
             cameraController?.FitToFloor(floorSize);
-            float observationScale = floorSize.magnitude;
-            policyObservationProvider?.Configure(policyObservationProvider.GetComponent<NavigationMetrics>(), observationScale, goalReachRadius);
+            ConfigureRuntimeScenarioContracts();
+        }
+
+        private void ConfigureRuntimeScenarioContracts()
+        {
+            float observationScale = Mathf.Max(1f, floorSize.magnitude);
+            policyObservationProvider?.Configure(navigationMetrics, observationScale, goalReachRadius);
+            goalReachChecker?.Configure(episodeEvents, navigationMetrics, goalReachRadius);
         }
 
         private Vector2 GetMinimumFloorSize()
@@ -584,7 +609,7 @@ namespace EnvForge.Navigation
         private Vector2 FindOpenUserWallCenter(Vector2 requestedCenter, float length, float thickness, float rotationYDegrees)
         {
             Vector2 clampedRequestedCenter = ClampUserWallCenter(requestedCenter, length, thickness, rotationYDegrees);
-            if (!OverlapsExistingUserWall(clampedRequestedCenter, length, thickness, rotationYDegrees, -1))
+            if (!OverlapsExistingUserWall(clampedRequestedCenter, length, thickness, rotationYDegrees, -1, includeWallClearance: true))
             {
                 return clampedRequestedCenter;
             }
@@ -607,7 +632,7 @@ namespace EnvForge.Navigation
                             length,
                             thickness,
                             rotationYDegrees);
-                        if (!OverlapsExistingUserWall(candidate, length, thickness, rotationYDegrees, -1))
+                        if (!OverlapsExistingUserWall(candidate, length, thickness, rotationYDegrees, -1, includeWallClearance: true))
                         {
                             return candidate;
                         }
@@ -620,11 +645,18 @@ namespace EnvForge.Navigation
 
         public bool CanPlaceUserWall(int indexToIgnore, Vector2 center, float length, float rotationYDegrees)
         {
-            return !OverlapsExistingUserWall(center, length, wallThickness, rotationYDegrees, indexToIgnore);
+            return !OverlapsExistingUserWall(center, length, wallThickness, rotationYDegrees, indexToIgnore, includeWallClearance: false);
         }
 
-        private bool OverlapsExistingUserWall(Vector2 center, float length, float thickness, float rotationYDegrees, int indexToIgnore)
+        private bool OverlapsExistingUserWall(
+            Vector2 center,
+            float length,
+            float thickness,
+            float rotationYDegrees,
+            int indexToIgnore,
+            bool includeWallClearance)
         {
+            float wallClearance = includeWallClearance ? UserWallPlacementGapMeters : 0f;
             for (int i = 0; i < userWalls.Count; i++)
             {
                 if (i == indexToIgnore)
@@ -637,11 +669,11 @@ namespace EnvForge.Navigation
                 if (OrientedRectsOverlap(
                     center,
                     length,
-                    thickness + UserWallPlacementGapMeters,
+                    thickness + wallClearance,
                     rotationYDegrees,
                     otherCenter,
                     wallSpec.Size.x,
-                    wallSpec.Size.z + UserWallPlacementGapMeters,
+                    wallSpec.Size.z + wallClearance,
                     wallSpec.RotationYDegrees))
                 {
                     return true;
@@ -724,7 +756,7 @@ namespace EnvForge.Navigation
                 Mathf.Abs(Vector2.Dot(firstNormal, testAxis)) * firstThickness * 0.5f;
             float secondRadius = Mathf.Abs(Vector2.Dot(secondAxis, testAxis)) * secondLength * 0.5f +
                 Mathf.Abs(Vector2.Dot(secondNormal, testAxis)) * secondThickness * 0.5f;
-            return distance <= firstRadius + secondRadius;
+            return distance < firstRadius + secondRadius - 0.001f;
         }
 
         private static Vector2 GetWallAxis(float rotationYDegrees)
@@ -758,6 +790,185 @@ namespace EnvForge.Navigation
             {
                 goalTransform.position = goalStartPosition;
             }
+        }
+
+        public bool TrySelectRandomAgentPose(out Vector3 position, out Quaternion rotation, out string reason)
+        {
+            reason = string.Empty;
+            position = agentTransform != null ? agentTransform.position : agentStartPosition;
+            rotation = agentTransform != null ? agentTransform.rotation : agentStartRotation;
+            if (agentTransform == null)
+            {
+                reason = "agent missing";
+                return false;
+            }
+
+            Collider agentCollider = agentTransform.GetComponent<Collider>();
+            Vector2 halfExtents = GetRandomStartHalfExtents();
+            Vector3 currentPosition = agentTransform.position;
+            int startSerial = runtimeStartSerial++;
+            if (TryFindRandomAgentPose(halfExtents, currentPosition, agentCollider, startSerial, requireDistinctStart: true, out position, out rotation) ||
+                TryFindRandomAgentPose(halfExtents, currentPosition, agentCollider, startSerial + 17, requireDistinctStart: false, out position, out rotation))
+            {
+                return true;
+            }
+
+            reason = "no open random start";
+            return false;
+        }
+
+        public void RecordRuntimeStart(Vector3 position, Quaternion rotation)
+        {
+            lastRuntimeStartPosition = position;
+            recentRuntimeStartPositions.Add(position);
+            while (recentRuntimeStartPositions.Count > 8)
+            {
+                recentRuntimeStartPositions.RemoveAt(0);
+            }
+
+            LastRuntimeStartSummary = $"start x={position.x:0.00} z={position.z:0.00} yaw={rotation.eulerAngles.y:0.#}";
+        }
+
+        private bool TryFindRandomAgentPose(
+            Vector2 halfExtents,
+            Vector3 currentPosition,
+            Collider agentCollider,
+            int startSerial,
+            bool requireDistinctStart,
+            out Vector3 position,
+            out Quaternion rotation)
+        {
+            float minimumDistinctStartDistanceMeters = requireDistinctStart
+                ? GetRuntimeStartMinimumDistance()
+                : 0.75f;
+            position = currentPosition;
+            rotation = agentTransform != null ? agentTransform.rotation : Quaternion.identity;
+            for (int attempt = 0; attempt < 240; attempt++)
+            {
+                Vector2 normalized = GenerateRuntimeStartSample(startSerial, attempt);
+                float x = Mathf.Lerp(-halfExtents.x, halfExtents.x, normalized.x);
+                float z = Mathf.Lerp(-halfExtents.y, halfExtents.y, normalized.y);
+                Vector3 candidatePosition = new(x, currentPosition.y, z);
+                if (IsNearExistingStart(candidatePosition, currentPosition, minimumDistinctStartDistanceMeters))
+                {
+                    continue;
+                }
+
+                if (OverlapsBlockingGeometry(candidatePosition, Mathf.Max(0.1f, agentCollisionRadius), agentCollider))
+                {
+                    continue;
+                }
+
+                if (Vector3.Distance(candidatePosition, goalStartPosition) <= goalReachRadius * 1.75f)
+                {
+                    continue;
+                }
+
+                Quaternion candidateRotation = Quaternion.Euler(0f, Random.Range(-180f, 180f), 0f);
+                position = candidatePosition;
+                rotation = candidateRotation;
+                return true;
+            }
+
+            return false;
+        }
+
+        private float GetRuntimeStartMinimumDistance()
+        {
+            return Mathf.Clamp(Mathf.Min(floorSize.x, floorSize.y) * 0.25f, 1.5f, 4f);
+        }
+
+        private static Vector2 GenerateRuntimeStartSample(int startSerial, int attempt)
+        {
+            float x = Mathf.Repeat((startSerial * 0.61803398875f) + (attempt * 0.38196601125f) + Random.value * 0.13f, 1f);
+            float z = Mathf.Repeat((startSerial * 0.75487766625f) + (attempt * 0.569840291f) + Random.value * 0.13f, 1f);
+            return new Vector2(x, z);
+        }
+
+        private bool IsNearExistingStart(Vector3 candidatePosition, Vector3 currentPosition, float minimumDistanceMeters)
+        {
+            if (Vector3.Distance(candidatePosition, agentStartPosition) < minimumDistanceMeters)
+            {
+                return true;
+            }
+
+            if (Vector3.Distance(candidatePosition, currentPosition) < minimumDistanceMeters)
+            {
+                return true;
+            }
+
+            foreach (Vector3 recentPosition in recentRuntimeStartPositions)
+            {
+                if (Vector3.Distance(candidatePosition, recentPosition) < minimumDistanceMeters)
+                {
+                    return true;
+                }
+            }
+
+            return lastRuntimeStartPosition.HasValue &&
+                Vector3.Distance(candidatePosition, lastRuntimeStartPosition.Value) < minimumDistanceMeters;
+        }
+
+        private void ApplyAgentRuntimePose(Vector3 position, Quaternion rotation)
+        {
+            Rigidbody body = agentTransform != null ? agentTransform.GetComponent<Rigidbody>() : null;
+            if (body != null)
+            {
+#if UNITY_6000_0_OR_NEWER
+                body.linearVelocity = Vector3.zero;
+#else
+                body.velocity = Vector3.zero;
+#endif
+                body.angularVelocity = Vector3.zero;
+                body.isKinematic = false;
+                body.position = position;
+                body.rotation = rotation;
+            }
+
+            if (agentTransform != null)
+            {
+                agentTransform.SetPositionAndRotation(position, rotation);
+            }
+
+            if (liveController != null)
+            {
+                liveController.SetResetPose(position, rotation, applyImmediately: false);
+            }
+
+            Physics.SyncTransforms();
+        }
+
+        private bool OverlapsBlockingGeometry(Vector3 position, float radius, Collider ignoredCollider)
+        {
+            Collider[] overlaps = Physics.OverlapSphere(position, radius, ~0, QueryTriggerInteraction.Ignore);
+            for (int index = 0; index < overlaps.Length; index++)
+            {
+                Collider overlap = overlaps[index];
+                if (overlap == null ||
+                    overlap == ignoredCollider ||
+                    IsAgentCollider(overlap) ||
+                    IsFloorCollider(overlap))
+                {
+                    continue;
+                }
+
+                if (overlap != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsAgentCollider(Collider collider)
+        {
+            return agentTransform != null && collider.transform.IsChildOf(agentTransform);
+        }
+
+        private bool IsFloorCollider(Collider collider)
+        {
+            return floorObject != null && collider.transform.IsChildOf(floorObject.transform);
         }
 
         private Vector2 ClampPointInsideBoundary(Vector2 center, float clearance)

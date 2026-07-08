@@ -10,17 +10,13 @@ namespace EnvForge.Navigation.Replay
     public sealed class NavigationReplayPlayer : MonoBehaviour
     {
         private const float Padding = 12f;
-        private const float Width = 680f;
         private const float Height = 320f;
         private const float CompactWidth = 520f;
         private const float CompactHeight = 118f;
         private const float CompactButtonHeight = 42f;
         private const float CompactIconButtonWidth = 48f;
         private const float BottomMargin = 32f;
-        private const float ButtonHeight = 52f;
-        private const float ButtonWidth = 70f;
         private const float ButtonGap = 8f;
-        private const float EpisodeButtonWidth = 108f;
         private const float EpisodeGapSeconds = 0.35f;
         private const string CameraMountHeightSensorId = "camera_mount_height";
         private const int FontSize = 26;
@@ -43,7 +39,6 @@ namespace EnvForge.Navigation.Replay
         private GUIStyle buttonStyle;
         private GUIStyle boxStyle;
         private EnvForgeCloudRunPanel cloudRunPanel;
-        private NavigationWorldEditorPanel worldEditorPanel;
         private NavigationSceneBuilder sceneBuilder;
         private Texture2D previousIcon;
         private Texture2D playIcon;
@@ -62,6 +57,7 @@ namespace EnvForge.Navigation.Replay
         private string status = "Replay: no log loaded";
 
         public event Action<int, bool> WindowBoundaryRequested;
+        public event Action ReplayControlRequested;
 
         public bool HasReplay => steps.Count > 0;
 
@@ -125,6 +121,7 @@ namespace EnvForge.Navigation.Replay
             windowCount = Mathf.Max(1, replayWindowCount);
             windowLabel = string.IsNullOrWhiteSpace(label) ? "Replay" : label;
             isPlaying = autoPlay && steps.Count > 0;
+            ReplayControlRequested?.Invoke();
             DisableLiveControl();
             ApplyCurrentStep();
             status = steps.Count > 0
@@ -140,6 +137,7 @@ namespace EnvForge.Navigation.Replay
             }
 
             isPlaying = true;
+            ReplayControlRequested?.Invoke();
             if (currentStepIndex >= steps.Count - 1)
             {
                 if (windowIndex < windowCount - 1)
@@ -162,6 +160,7 @@ namespace EnvForge.Navigation.Replay
         public void Pause()
         {
             isPlaying = false;
+            ReplayControlRequested?.Invoke();
             DisableLiveControl();
             status = "Replay: paused";
         }
@@ -171,6 +170,7 @@ namespace EnvForge.Navigation.Replay
             isPlaying = false;
             currentStepIndex = 0;
             replayClock = 0f;
+            ReplayControlRequested?.Invoke();
             DisableLiveControl();
             ApplyCurrentStep();
             status = HasReplay ? "Replay: stopped" : "Replay: no log loaded";
@@ -201,6 +201,7 @@ namespace EnvForge.Navigation.Replay
             }
 
             isPlaying = false;
+            ReplayControlRequested?.Invoke();
             DisableLiveControl();
             if (currentStepIndex >= steps.Count - 1)
             {
@@ -223,6 +224,7 @@ namespace EnvForge.Navigation.Replay
             }
 
             isPlaying = false;
+            ReplayControlRequested?.Invoke();
             DisableLiveControl();
             int episodeIndex = GetCurrentEpisodeIndex();
             if (episodeIndex >= episodeStartIndices.Count - 1)
@@ -247,6 +249,7 @@ namespace EnvForge.Navigation.Replay
             }
 
             isPlaying = false;
+            ReplayControlRequested?.Invoke();
             DisableLiveControl();
             int episodeIndex = GetCurrentEpisodeIndex();
             if (episodeIndex <= 0)
@@ -271,6 +274,7 @@ namespace EnvForge.Navigation.Replay
             }
 
             isPlaying = false;
+            ReplayControlRequested?.Invoke();
             DisableLiveControl();
             if (currentStepIndex <= 0)
             {
@@ -330,7 +334,7 @@ namespace EnvForge.Navigation.Replay
 
         private void OnGUI()
         {
-            if (!showOverlay || !HasReplay || IsCloudPanelExpanded() || IsWorldPanelExpanded())
+            if (!showOverlay || !HasReplay || IsCloudPanelExpanded())
             {
                 NavigationInputBlocker.UnregisterPanel(nameof(NavigationReplayPlayer));
                 return;
@@ -389,20 +393,14 @@ namespace EnvForge.Navigation.Replay
             }
 
             float detailsLeft = buttonLeft + CompactIconButtonWidth + ButtonGap;
-            float cameraButtonWidth = 74f;
-            if (GUI.Button(new Rect(detailsLeft, buttonTop, cameraButtonWidth, CompactButtonHeight), "Top", buttonStyle))
+            float cameraButtonWidth = 96f;
+            if (GUI.Button(new Rect(detailsLeft, buttonTop, cameraButtonWidth, CompactButtonHeight), GetNextCameraViewLabel(), buttonStyle))
             {
-                SetTopCameraView();
+                ToggleCameraView();
             }
 
             detailsLeft += cameraButtonWidth + ButtonGap;
-            if (GUI.Button(new Rect(detailsLeft, buttonTop, cameraButtonWidth, CompactButtonHeight), "Angle", buttonStyle))
-            {
-                SetAngledCameraView();
-            }
-
-            detailsLeft += cameraButtonWidth + ButtonGap;
-            if (GUI.Button(new Rect(detailsLeft, buttonTop, contentRect.xMax - detailsLeft, CompactButtonHeight), "Details", buttonStyle))
+            if (GUI.Button(new Rect(detailsLeft, buttonTop, contentRect.xMax - detailsLeft, CompactButtonHeight), "More", buttonStyle))
             {
                 showDetails = true;
             }
@@ -410,77 +408,76 @@ namespace EnvForge.Navigation.Replay
 
         private void DrawDetailsOverlay()
         {
-            float boxWidth = Mathf.Min(Width, Screen.width - Padding * 2f);
+            float boxWidth = Mathf.Min(CompactWidth, Screen.width - Padding * 2f);
             float boxHeight = Mathf.Min(Height, Screen.height - Padding * 2f);
             Rect boxRect = new(Padding, Screen.height - boxHeight - BottomMargin, boxWidth, boxHeight);
             GUI.Box(boxRect, GUIContent.none, boxStyle);
             UpdatePointerOverPanel(boxRect);
 
             Rect contentRect = new(boxRect.x + Padding, boxRect.y + Padding, boxWidth - Padding * 2f, boxHeight - Padding * 2f);
-            GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 36f), "Replay", titleStyle);
-            if (GUI.Button(new Rect(contentRect.xMax - 292f, contentRect.y, 76f, 42f), "Top", buttonStyle))
-            {
-                SetTopCameraView();
-            }
+            GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 32f), FormatCompactStatus(), labelStyle);
 
-            if (GUI.Button(new Rect(contentRect.xMax - 208f, contentRect.y, 76f, 42f), "Angle", buttonStyle))
-            {
-                SetAngledCameraView();
-            }
-
-            if (GUI.Button(new Rect(contentRect.xMax - 128f, contentRect.y, 128f, 42f), "Compact", buttonStyle))
-            {
-                showDetails = false;
-            }
-
-            float buttonTop = contentRect.y + 44f;
+            float buttonTop = contentRect.y + 40f;
             float buttonLeft = contentRect.x;
-            if (DrawIconButton(new Rect(buttonLeft, buttonTop, ButtonWidth, ButtonHeight), previousIcon, "Previous step"))
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), previousIcon, "Previous step"))
             {
                 StepBackward();
             }
 
-            buttonLeft += ButtonWidth + ButtonGap;
-            if (DrawIconButton(new Rect(buttonLeft, buttonTop, ButtonWidth, ButtonHeight), playIcon, "Play"))
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), playIcon, "Play"))
             {
                 Play();
             }
 
-            buttonLeft += ButtonWidth + ButtonGap;
-            if (DrawIconButton(new Rect(buttonLeft, buttonTop, ButtonWidth, ButtonHeight), pauseIcon, "Pause"))
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), pauseIcon, "Pause"))
             {
                 Pause();
             }
 
-            buttonLeft += ButtonWidth + ButtonGap;
-            if (DrawIconButton(new Rect(buttonLeft, buttonTop, ButtonWidth, ButtonHeight), stopIcon, "Stop"))
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), stopIcon, "Stop"))
             {
                 Stop();
             }
 
-            buttonLeft += ButtonWidth + ButtonGap;
-            if (DrawIconButton(new Rect(buttonLeft, buttonTop, ButtonWidth, ButtonHeight), nextIcon, "Next step"))
+            buttonLeft += CompactIconButtonWidth + ButtonGap;
+            if (DrawIconButton(new Rect(buttonLeft, buttonTop, CompactIconButtonWidth, CompactButtonHeight), nextIcon, "Next step"))
             {
                 StepForward();
             }
 
-            buttonLeft += ButtonWidth + ButtonGap;
+            float detailsLeft = buttonLeft + CompactIconButtonWidth + ButtonGap;
+            float cameraButtonWidth = 96f;
+            if (GUI.Button(new Rect(detailsLeft, buttonTop, cameraButtonWidth, CompactButtonHeight), GetNextCameraViewLabel(), buttonStyle))
+            {
+                ToggleCameraView();
+            }
+
+            detailsLeft += cameraButtonWidth + ButtonGap;
+            if (GUI.Button(new Rect(detailsLeft, buttonTop, contentRect.xMax - detailsLeft, CompactButtonHeight), "Less", buttonStyle))
+            {
+                showDetails = false;
+            }
+
+            float episodeTop = buttonTop + CompactButtonHeight + 10f;
             bool wasEnabled = GUI.enabled;
+            float episodeWidth = (contentRect.width - ButtonGap) * 0.5f;
             GUI.enabled = wasEnabled && CanStepToPreviousEpisode();
-            if (GUI.Button(new Rect(buttonLeft, buttonTop, EpisodeButtonWidth, ButtonHeight), "Prev Ep", buttonStyle))
+            if (GUI.Button(new Rect(contentRect.x, episodeTop, episodeWidth, CompactButtonHeight), "Prev Ep", buttonStyle))
             {
                 StepToPreviousEpisode();
             }
 
-            buttonLeft += EpisodeButtonWidth + ButtonGap;
             GUI.enabled = wasEnabled && CanStepToNextEpisode();
-            if (GUI.Button(new Rect(buttonLeft, buttonTop, EpisodeButtonWidth, ButtonHeight), "Next Ep", buttonStyle))
+            if (GUI.Button(new Rect(contentRect.x + episodeWidth + ButtonGap, episodeTop, episodeWidth, CompactButtonHeight), "Next Ep", buttonStyle))
             {
                 StepToNextEpisode();
             }
             GUI.enabled = wasEnabled;
 
-            float detailTop = buttonTop + ButtonHeight + 12f;
+            float detailTop = episodeTop + CompactButtonHeight + 12f;
             GUI.Label(new Rect(contentRect.x, detailTop, contentRect.width, 36f), FormatHudStatus(), labelStyle);
             GUI.Label(new Rect(contentRect.x, detailTop + 40f, contentRect.width, contentRect.yMax - detailTop - 40f), FormatCurrentStep(), labelStyle);
         }
@@ -511,24 +508,14 @@ namespace EnvForge.Navigation.Replay
             NavigationInputBlocker.RegisterPanel(nameof(NavigationReplayPlayer), panelRect);
         }
 
-        private bool IsWorldPanelExpanded()
+        private string GetNextCameraViewLabel()
         {
-            if (worldEditorPanel == null)
-            {
-                worldEditorPanel = FindFirstObjectByType<NavigationWorldEditorPanel>();
-            }
-
-            return worldEditorPanel != null && worldEditorPanel.IsExpandedPanelOpen;
+            return GetSceneBuilder()?.NextCameraViewLabel ?? "View";
         }
 
-        private void SetTopCameraView()
+        private void ToggleCameraView()
         {
-            GetSceneBuilder()?.SetTopCameraView();
-        }
-
-        private void SetAngledCameraView()
-        {
-            GetSceneBuilder()?.SetAngledCameraView();
+            GetSceneBuilder()?.ToggleCameraView();
         }
 
         private NavigationSceneBuilder GetSceneBuilder()
@@ -863,7 +850,7 @@ namespace EnvForge.Navigation.Replay
                 fontSize = ButtonFontSize,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
-                wordWrap = true,
+                wordWrap = false,
             };
             Texture2D buttonBackground = CreateTexture(new Color(0.06f, 0.09f, 0.12f, 0.92f));
             Texture2D buttonHoverBackground = CreateTexture(new Color(0.08f, 0.16f, 0.2f, 0.96f));

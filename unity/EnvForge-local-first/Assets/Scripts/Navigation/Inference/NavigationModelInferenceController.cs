@@ -11,7 +11,7 @@ namespace EnvForge.Navigation.Inference
 {
     [RequireComponent(typeof(AgentMotor))]
     [RequireComponent(typeof(Rigidbody))]
-    public sealed class NavigationModelInferenceController : MonoBehaviour
+    public sealed class NavigationModelInferenceController : MonoBehaviour, INavigationEpisodeEvents
     {
         [SerializeField] private int decisionIntervalFrames = 1;
 
@@ -36,6 +36,7 @@ namespace EnvForge.Navigation.Inference
         private AgentMotor motor;
         private Rigidbody body;
         private NavigationLiveController liveController;
+        private NavigationEpisodeEventHub episodeEventHub;
         private NavigationGoalObservationProvider observationProvider;
         private Camera segmentationCamera;
         private RenderTexture imageObservationTexture;
@@ -54,6 +55,10 @@ namespace EnvForge.Navigation.Inference
 
         public bool IsRunning => isRunning;
 
+        public event Action InferenceGoalReached;
+
+        public event Action InferenceWallCollision;
+
         public string StatusSummary => statusSummary;
 
         public string LastActionSummary => lastActionSummary;
@@ -63,6 +68,8 @@ namespace EnvForge.Navigation.Inference
         public string LastImageObservationSummary => lastImageObservationSummary;
 
         public string LastErrorDetails => lastErrorDetails;
+
+        public string LastRuntimePoseSummary { get; private set; } = "pose -";
 
         public float CameraMountHeightMeters
         {
@@ -84,11 +91,13 @@ namespace EnvForge.Navigation.Inference
             AgentMotor agentMotor,
             Rigidbody agentBody,
             NavigationLiveController controller,
+            NavigationEpisodeEventHub eventHub,
             NavigationGoalObservationProvider observations)
         {
             motor = agentMotor;
             body = agentBody;
             liveController = controller;
+            episodeEventHub = eventHub;
             observationProvider = observations;
         }
 
@@ -171,6 +180,21 @@ namespace EnvForge.Navigation.Inference
 
         public bool StartInference(string localModelPath, out string error)
         {
+            return StartInference(localModelPath, false, default, default, out error);
+        }
+
+        public bool StartInference(string localModelPath, Vector3 runtimeStartPosition, Quaternion runtimeStartRotation, out string error)
+        {
+            return StartInference(localModelPath, true, runtimeStartPosition, runtimeStartRotation, out error);
+        }
+
+        private bool StartInference(
+            string localModelPath,
+            bool hasRuntimeStartPose,
+            Vector3 runtimeStartPosition,
+            Quaternion runtimeStartRotation,
+            out string error)
+        {
             StopInference();
             error = string.Empty;
 
@@ -210,6 +234,15 @@ namespace EnvForge.Navigation.Inference
                 return false;
             }
 
+            if (hasRuntimeStartPose)
+            {
+                ApplyRuntimeStartPose(runtimeStartPosition, runtimeStartRotation);
+            }
+            else
+            {
+                LastRuntimePoseSummary = $"pose x={transform.position.x:0.00} z={transform.position.z:0.00} yaw={transform.rotation.eulerAngles.y:0.#}";
+            }
+
             isRunning = true;
             lastActionSummary = "action waiting";
             lastObservationSummary = "obs waiting";
@@ -232,13 +265,37 @@ namespace EnvForge.Navigation.Inference
                 body.isKinematic = false;
             }
 
+            episodeEventHub?.SetOverrideSink(this);
             statusSummary = $"Inference: running {Path.GetFileName(localModelPath)}";
             return true;
+        }
+
+        private void ApplyRuntimeStartPose(Vector3 position, Quaternion rotation)
+        {
+            motor?.Stop();
+            if (body != null)
+            {
+                body.isKinematic = false;
+#if UNITY_6000_0_OR_NEWER
+                body.linearVelocity = Vector3.zero;
+#else
+                body.velocity = Vector3.zero;
+#endif
+                body.angularVelocity = Vector3.zero;
+                body.position = position;
+                body.rotation = rotation;
+            }
+
+            transform.SetPositionAndRotation(position, rotation);
+            liveController?.SetResetPose(position, rotation, applyImmediately: false);
+            LastRuntimePoseSummary = $"pose x={position.x:0.00} z={position.z:0.00} yaw={rotation.eulerAngles.y:0.#}";
+            Physics.SyncTransforms();
         }
 
         public void StopInference()
         {
             isRunning = false;
+            episodeEventHub?.ClearOverrideSink(this);
             motor?.Stop();
             motor?.ResetMotionProfile();
             DisposeSession();
@@ -314,7 +371,7 @@ namespace EnvForge.Navigation.Inference
                 float turn = Mathf.Clamp(rawTurn, -1f, 1f);
                 motor.SetInput(forward, turn);
                 lastActionSummary = FormatActionSummary(rawForward, rawTurn, forward, turn);
-                statusSummary = rawForward < -0.0001f
+                statusSummary = IsActionContractViolation(rawForward, rawTurn)
                     ? "Inference: contract violation"
                     : $"Inference: running {Path.GetFileName(modelPath)}";
             }
@@ -330,8 +387,18 @@ namespace EnvForge.Navigation.Inference
             float forward,
             float turn)
         {
-            string warning = rawForward < -0.0001f ? " · CONTRACT VIOLATION forward<0" : string.Empty;
+            string warning = IsActionContractViolation(rawForward, rawTurn)
+                ? " · CONTRACT VIOLATION action out of range"
+                : string.Empty;
             return $"action raw f {rawForward:0.00} t {rawTurn:0.00} · applied f {forward:0.00} t {turn:0.00}{warning}";
+        }
+
+        private static bool IsActionContractViolation(float rawForward, float rawTurn)
+        {
+            return rawForward < -0.0001f ||
+                rawForward > 1.0001f ||
+                rawTurn < -1.0001f ||
+                rawTurn > 1.0001f;
         }
 
         private void StopWithError(string summary, string details = "")
@@ -340,6 +407,44 @@ namespace EnvForge.Navigation.Inference
             lastErrorDetails = string.IsNullOrWhiteSpace(details) ? summary : details;
             LogInferenceError(lastErrorDetails);
             isRunning = false;
+            episodeEventHub?.ClearOverrideSink(this);
+            motor?.Stop();
+            motor?.ResetMotionProfile();
+            DisposeSession();
+            if (liveController != null)
+            {
+                liveController.enabled = true;
+            }
+        }
+
+        public void ReportGoalReached()
+        {
+            StopForTerminalEvent("Inference: goal reached");
+            InferenceGoalReached?.Invoke();
+        }
+
+        public void ReportWallCollision()
+        {
+            ReportInferenceWallCollision("Inference: wall collision");
+        }
+
+        public void ReportWallCollision(string wallId)
+        {
+            string suffix = string.IsNullOrWhiteSpace(wallId) ? string.Empty : $" {wallId}";
+            ReportInferenceWallCollision($"Inference: wall collision{suffix}");
+        }
+
+        private void ReportInferenceWallCollision(string summary)
+        {
+            StopForTerminalEvent(summary);
+            InferenceWallCollision?.Invoke();
+        }
+
+        private void StopForTerminalEvent(string summary)
+        {
+            statusSummary = summary;
+            isRunning = false;
+            episodeEventHub?.ClearOverrideSink(this);
             motor?.Stop();
             motor?.ResetMotionProfile();
             DisposeSession();
