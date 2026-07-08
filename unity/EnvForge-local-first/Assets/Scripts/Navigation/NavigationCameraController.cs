@@ -94,8 +94,7 @@ namespace EnvForge.Navigation
             Keyboard keyboard = Keyboard.current;
             if (keyboard != null &&
                 GUIUtility.keyboardControl == 0 &&
-                !NavigationWorldEditorPanel.IsTextInputFocused &&
-                !Cloud.EnvForgeCloudRunPanel.IsTextInputFocused)
+                !NavigationInputBlocker.ShouldBlockWorldKeyboardInput)
             {
                 if (keyboard.rKey.wasPressedThisFrame || keyboard.fKey.wasPressedThisFrame)
                 {

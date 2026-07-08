@@ -27,6 +27,12 @@ namespace EnvForge.Navigation
                 return;
             }
 
+            if (NavigationInputBlocker.ShouldBlockWorldKeyboardInput)
+            {
+                motor.SetInput(0f, 0f);
+                return;
+            }
+
             Keyboard keyboard = Keyboard.current;
             if (keyboard == null)
             {
