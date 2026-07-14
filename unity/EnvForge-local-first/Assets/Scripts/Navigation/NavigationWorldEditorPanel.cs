@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using EmbodiedLab.Contracts;
+using EmbodiedLab.Unity;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
@@ -917,7 +919,7 @@ namespace EnvForge.Navigation
 
             try
             {
-                ScenarioBundleDto scenario = ScenarioBundleSerializer.FromScenarioBundleJson(File.ReadAllText(safePath));
+                ScenarioBundle scenario = ScenarioBundleJson.Deserialize(File.ReadAllText(safePath));
                 sceneBuilder.ApplyScenarioBundle(scenario);
                 sceneBuilder.RecordScenarioSource($"Map: loaded {displayName}");
                 selectedWallIndex = sceneBuilder.UserWallCount > 0 ? sceneBuilder.UserWallCount - 1 : -1;

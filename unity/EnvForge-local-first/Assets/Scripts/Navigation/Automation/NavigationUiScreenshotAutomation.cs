@@ -1,11 +1,9 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
+using EmbodiedLab.Unity;
 using EnvForge.Navigation;
 using EnvForge.Navigation.Cloud;
-using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
@@ -92,7 +90,7 @@ namespace EnvForge.Navigation.Automation
             string replayPath = GetArgumentValue(ReplayFileArgument);
             if (replayPlayer != null && !string.IsNullOrWhiteSpace(replayPath) && File.Exists(replayPath))
             {
-                replayPlayer.LoadSteps(ReadReplaySteps(replayPath));
+                replayPlayer.LoadSteps(EmbodiedLabReplay.ReadSteps(replayPath));
                 replayPlayer.Play();
             }
 
@@ -147,24 +145,5 @@ namespace EnvForge.Navigation.Automation
             return null;
         }
 
-        private static IReadOnlyList<ReplayLogStepDto> ReadReplaySteps(string path)
-        {
-            List<ReplayLogStepDto> steps = new();
-            using Stream source = File.OpenRead(path);
-            using Stream readable = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
-                ? new GZipStream(source, CompressionMode.Decompress)
-                : source;
-            using StreamReader reader = new(readable);
-            string line;
-            while ((line = reader.ReadLine()) != null)
-            {
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    steps.Add(ReplayLogSerializer.FromReplayLogStepJson(line));
-                }
-            }
-
-            return steps;
-        }
     }
 }

@@ -1,4 +1,10 @@
-# EmbodiedLab Unity SDK 移行計画
+# EmbodiedLab Unity SDK 移行記録
+
+## 状態
+
+`EmbodiedLab.Unity` の導入と EnvForge の呼び出し元移行は実装済みである。
+Unity Editor を使う package resolve、compile、Play mode の最終確認は、Unity
+6000.3.11f1 を利用できる環境で行う。
 
 ## 目的
 
@@ -13,7 +19,7 @@ EnvForge 固有の編集、表示、Replay、推論機能に集中する。
 - WebSocket result stream と HTTP 再同期
 - artifact location の解決と download
 - Replay Bundle manifest / chunk の取得、展開、parse
-- API error、retry、timeout、cancellation、compatibility check
+- API error、timeout、local cancellation、cloud job cancellation
 - API endpoint と WebSocket endpoint の SDK 設定
 
 現在の主な移行元は `Assets/Scripts/Navigation/Cloud` と
@@ -44,14 +50,16 @@ Replay Bundle の取得と parse は SDK に移すが、robot、wall、goal を 
   メリットとデメリット、推奨案と推奨理由を提示する。
 - 設計判断はユーザとの合意前に実装しない。
 
-## 移行方針
+## 実施した移行
 
-1. 既存 EnvForge fixture と EmbodiedLab test で現在の契約を固定する。
-2. SDK の最小 API を導入し、EnvForge の呼び出し元を一経路ずつ置き換える。
-3. 同じ責務の新旧実装を長期間併存させない。
-4. 移行済みの DTO、client、downloader は EnvForge から削除し、未移行参照を明確な
-   compile error または test failure にする。
-5. EnvForge の UI と end-to-end 動作を確認してから次の責務へ進む。
+1. EmbodiedLab の JSON Schema と fixture で契約を固定した。
+2. SDK の `EmbodiedLabJob`、`ScenarioBundleJson`、`EmbodiedLabReplay` を導入した。
+3. submit と training start を `EmbodiedLabJob.SubmitAsync` に集約した。
+4. job 監視は WebSocket-first とし、明示的な再同期だけ `RefreshAsync` を使う。
+5. `SubmissionId` と cancellation capability token を EnvForge の履歴に保存し、
+   再起動後の監視、取得、キャンセルを可能にした。
+6. Replay manifest、選択した chunk、学習済みモデルの取得と parse を SDK へ移した。
+7. EnvForge 内の旧 DTO、HTTP client、WebSocket client、downloader、serializer を削除した。
 
 ## 学習環境モードとの関係
 
@@ -65,16 +73,17 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
 
 ## 検証
 
-- UPM package を Git URL から追加できる。
-- EnvForge の既存 Scenario Bundle fixture が SDK 経由でも同じ意味を保つ。
-- submit、train、progress、completed result、artifact download が SDK 経由で動く。
-- Unity を再起動しても EnvForge の job history と取得済み artifact を利用できる。
-- Replay の取得処理を SDK へ移しても、既存 Replay UI と再生結果が変わらない。
+- UPM package は merge commit を指定した Git URL で固定している。
+- SDK 側では contract、transport、facade、scenario/replay API の test と lint が成功した。
+- EnvForge の replay fixture は生成済み契約の必須項目を満たす。
+- 旧実装への参照が残っていないことと JSON / Markdown / C# syntax を静的確認する。
+- Unity package resolve、compile、Play mode での submit、monitor、cancel、download、
+  replay、履歴復元は Unity 6000.3.11f1 環境で最終確認する。
 
-## 保留事項
+## スコープ外・保留事項
 
-- SDK の公開 API が確定するまで、EnvForge の UI 型を SDK へ持ち込まない。
 - job history の汎用部分を将来 SDK へ移すかは、複数フロントエンドの要求が確認できるまで
   EnvForge 側に保留する。
-- 認証、private artifact、signed URL は SDK 設計に拡張点を残すが、初期移行では
-  現在の backend contract を変更しない。
+- 認証、private artifact、signed URL は今回実装しない。具体的な backend contract と
+  利用要件が決まった時点で設計し、将来用途だけの拡張点は先に追加しない。
+- `fixed` / `generated` の選択と宣言的な生成規則は、この移行とは別の設計・実装にする。

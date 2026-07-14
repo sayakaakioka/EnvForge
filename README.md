@@ -16,15 +16,18 @@ Current Unity target: Unity 6.3 LTS (`6000.3.11f1`).
 
 The active runtime no longer uses Unity ML-Agents. Training is owned by
 EmbodiedLab, and EnvForge treats `policy.onnx` as the canonical model artifact
-for local inference. EnvForge is responsible for:
+for local inference. Reusable cloud transport and contract handling come from
+the `com.embodiedlab.unity` package. EnvForge is responsible for:
 
 - editing the world size, boundary walls, user walls, start pose, and goal
 - building a Scenario Bundle from the Unity scene
-- submitting cloud training jobs to EmbodiedLab
-- receiving job progress and result metadata
-- downloading `policy.onnx` and Replay Bundle artifacts
+- presenting cloud job controls and maintaining local job history
 - replaying train/eval trajectories in Unity
 - running local ONNX Runtime inference against the current scene
+
+`EmbodiedLab.Unity` submits and starts jobs, monitors progress over WebSocket,
+performs explicit HTTP resynchronization, cancels jobs, serializes the shared
+contracts, and downloads model and replay artifacts.
 
 The ONNX Runtime Unity files under `Assets/Plugins/ONNXRuntime/` are part of
 the active path and should stay in the Unity project.
@@ -47,11 +50,17 @@ The current main groups are:
 
 - `Automation`: unattended model evaluation, cloud job submission, screenshots,
   and world variants
-- `Cloud`: EmbodiedLab API, artifact download, job history, and cloud UI
-- `Contracts`: Scenario Bundle, Result Bundle, and Replay Bundle DTOs
+- `Cloud`: endpoint settings, EnvForge job history, and cloud UI
+- `Contracts`: EnvForge scenario defaults, layout, and scene-to-contract builder
 - `Inference`: local ONNX Runtime inference
 - `Replay`: Replay Bundle playback
 - `Sensors`: segmentation preview and camera observation support
+
+The shared Scenario, Result, and Replay contract types and the HTTP/WebSocket
+clients live in the separate
+[`EmbodiedLab.Unity`](https://github.com/sayakaakioka/EmbodiedLab.Unity)
+repository. This project pins the package to a tested commit in
+`Packages/manifest.json`.
 
 ## Artifacts
 
@@ -102,9 +111,10 @@ removed from the active repository. Use Git history if that context is needed.
 
 ## Public Repository Notes
 
-Do not commit private endpoints, bearer tokens, signed URLs, or local
-environment files. API endpoints should be configured through Unity settings or
-runtime configuration, not hard-coded into source files.
+Do not commit bearer tokens, cancellation capability tokens, signed URLs,
+private endpoint assets, or local environment files. Public deployment
+endpoints may be serialized in the scene or supplied through Unity settings and
+command-line configuration.
 
 ## License
 

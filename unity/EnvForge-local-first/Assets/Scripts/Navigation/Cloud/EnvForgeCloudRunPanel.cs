@@ -3,10 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
-using EnvForge.Navigation.Contracts;
+using System.Threading;
+using EmbodiedLab.Contracts;
+using EmbodiedLab.Unity;
 using EnvForge.Navigation.Inference;
 using EnvForge.Navigation.Replay;
 using UnityEngine;
@@ -34,7 +35,6 @@ namespace EnvForge.Navigation.Cloud
         private const float SettingsFieldHeight = 34f;
         private const float SettingsLabelWidth = 300f;
         private const float SettingsColumnLabelWidth = 178f;
-        private const float ResultPollIntervalSeconds = 30f;
         private const string SettingsTextFieldFocusPrefix = "CloudSettingsTextField_";
         private const float DebugOverlayMaxHeight = 420f;
 
@@ -44,13 +44,12 @@ namespace EnvForge.Navigation.Cloud
         private NavigationSceneBuilder sceneBuilder;
         private NavigationReplayPlayer replayPlayer;
         private NavigationModelInferenceController inferenceController;
-        private EnvForgeApiClient apiClient;
-        private EnvForgeArtifactDownloader artifactDownloader;
+        private EmbodiedLabEndpoints endpoints;
+        private EmbodiedLabJob activeJob;
         private EnvForgeJobHistoryStore jobHistoryStore;
-        private EnvForgeResultWebSocketClient resultWebSocketClient;
-        private ResultDocumentDto latestResult;
+        private readonly CancellationTokenSource lifetimeCancellation = new();
+        private ResultDocument latestResult;
         private string submissionId;
-        private string webSocketUrlTemplate;
         private string activeScenarioId;
         private string loadedReplaySummary;
         private string resultStreamState = "not connected";
@@ -60,19 +59,13 @@ namespace EnvForge.Navigation.Cloud
         private string lastResultStreamError;
         private string lastResultFetchError;
         private int consecutiveResultFetchFailures;
-        private bool resultStreamErrorReported;
-        private bool restoredJobNeedsResume;
         private bool autoDownloadStarted;
         private bool resultFetchInFlight;
         private bool replayChunkLoadInFlight;
         private int activeReplayChunkIndex = -1;
-        private int activeReplayTotalSteps;
         private string activeReplayManifestPath;
         private string activeReplayScenarioSource;
-        private ArtifactLocationDto activeReplayManifestArtifact;
-        private ReplayBundleManifestDto activeReplayManifest;
-        private readonly List<ReplayBundleChunkDto> activeReplayChunks = new();
-        private float nextResultPollAt;
+        private readonly List<ReplayBundleChunk> activeReplayChunks = new();
         private string status = "Cloud: idle";
         private bool busy;
         private bool showTrainingSettings;
@@ -127,7 +120,6 @@ namespace EnvForge.Navigation.Cloud
         private string libraryNameText;
         private bool libraryRefreshInFlight;
         private bool inferenceRestartInFlight;
-        private string pendingResultFetchSource;
 
         public bool IsExpandedPanelOpen => showTrainingSettings || showJobDetails || showLibraryDetails;
 
@@ -137,7 +129,7 @@ namespace EnvForge.Navigation.Cloud
             NavigationModelInferenceController inference,
             EnvForgeApiSettings settings,
             string baseUrl,
-            string resultStreamUrlTemplate)
+            string resultWebSocketBaseUrl)
         {
             sceneBuilder = builder;
             replayPlayer = player;
@@ -158,27 +150,32 @@ namespace EnvForge.Navigation.Cloud
                 inferenceController.InferenceWallCollision += HandleInferenceWallCollision;
             }
             fallbackBaseUrl = string.IsNullOrWhiteSpace(baseUrl) ? fallbackBaseUrl : baseUrl;
-            apiClient = settings != null
-                ? new EnvForgeApiClient(settings)
-                : new EnvForgeApiClient(fallbackBaseUrl);
-            webSocketUrlTemplate = settings != null && !string.IsNullOrWhiteSpace(settings.WebSocketUrlTemplate)
-                ? settings.WebSocketUrlTemplate
-                : resultStreamUrlTemplate;
-            artifactDownloader = new EnvForgeArtifactDownloader();
+            string resolvedApiBaseUrl = settings != null
+                ? settings.BaseUrl
+                : fallbackBaseUrl;
+            string resolvedWebSocketBaseUrl = settings != null &&
+                !string.IsNullOrWhiteSpace(settings.WebSocketBaseUrl)
+                    ? settings.WebSocketBaseUrl
+                    : resultWebSocketBaseUrl;
+            try
+            {
+                endpoints = new EmbodiedLabEndpoints(
+                    resolvedApiBaseUrl,
+                    resolvedWebSocketBaseUrl);
+            }
+            catch (ArgumentException exception)
+            {
+                status = $"Cloud configuration failed: {FormatUserFacingError(exception.Message)}";
+                showJobDetails = true;
+            }
+
             jobHistoryStore = new EnvForgeJobHistoryStore(Application.persistentDataPath);
-            resultWebSocketClient = new EnvForgeResultWebSocketClient();
             RestoreLatestJob();
             SyncTextFromTrainingSettings();
-            if (restoredJobNeedsResume)
+            if (activeJob != null)
             {
-                StartCoroutine(ResumeLatestJob());
+                _ = ResumeActiveJobAsync("restored job");
             }
-        }
-
-        private void Update()
-        {
-            ProcessResultStreamMessages();
-            PollLatestResultIfNeeded();
         }
 
         private void OnDestroy()
@@ -197,7 +194,9 @@ namespace EnvForge.Navigation.Cloud
 
             EnvForge.Navigation.NavigationInputBlocker.UnregisterPanel(nameof(EnvForgeCloudRunPanel));
             EnvForge.Navigation.NavigationInputBlocker.UnregisterPanel(nameof(EnvForgeCloudRunPanel) + "Debug");
-            resultWebSocketClient?.Dispose();
+            lifetimeCancellation.Cancel();
+            SetActiveJob(null);
+            lifetimeCancellation.Dispose();
         }
 
         private void RestoreLatestJob()
@@ -215,13 +214,20 @@ namespace EnvForge.Navigation.Cloud
                 settingsNameText = recentJob.settings_name;
             }
 
+            if (endpoints != null && !string.IsNullOrWhiteSpace(submissionId))
+            {
+                SetActiveJob(EmbodiedLabJob.Restore(
+                    endpoints,
+                    submissionId,
+                    recentJob.cancel_token));
+            }
+
             if (!string.IsNullOrWhiteSpace(recentJob.local_replay_manifest_path))
             {
                 loadedReplaySummary = $"Saved replay bundle: {Shorten(recentJob.submission_id, 18)}";
             }
 
             status = $"Cloud: restored {Shorten(recentJob.submission_id, 18)}";
-            restoredJobNeedsResume = !string.IsNullOrWhiteSpace(submissionId);
         }
 
         private void OnGUI()
@@ -285,7 +291,7 @@ namespace EnvForge.Navigation.Cloud
 
         private string FormatCompactStatus()
         {
-            string state = latestResult?.status;
+            string state = latestResult == null ? null : FormatStatus(latestResult.Status);
             if (string.IsNullOrWhiteSpace(state))
             {
                 state = string.IsNullOrWhiteSpace(status) ? "Cloud: idle" : status;
@@ -367,17 +373,17 @@ namespace EnvForge.Navigation.Cloud
 
             if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), buttonStyle, !busy))
             {
-                StartCoroutine(LoadLatestReplay());
+                _ = LoadLatestReplayAsync();
             }
 
-            if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, !busy && apiClient != null && sceneBuilder != null))
+            if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, !busy && endpoints != null && sceneBuilder != null))
             {
-                StartCoroutine(SubmitAndTrain());
+                _ = SubmitAndTrainAsync();
             }
 
             if (DrawButton(downloadRect, new GUIContent("Download", "Download artifacts"), buttonStyle, !busy))
             {
-                StartCoroutine(DownloadAvailableArtifacts());
+                _ = DownloadAvailableArtifactsAsync();
             }
 
             GUIStyle aiButtonStyle = inferenceController != null && inferenceController.IsRunning
@@ -389,10 +395,11 @@ namespace EnvForge.Navigation.Cloud
             }
 
             float secondTop = top + height + ButtonGap;
-            float secondaryWidth = (contentRect.width - ButtonGap * 2f) / 3f;
+            float secondaryWidth = (contentRect.width - ButtonGap * 3f) / 4f;
             Rect jobRect = new(contentRect.x, secondTop, secondaryWidth, height);
             Rect libraryRect = new(jobRect.xMax + ButtonGap, secondTop, secondaryWidth, height);
             Rect settingsRect = new(libraryRect.xMax + ButtonGap, secondTop, secondaryWidth, height);
+            Rect cancelRect = new(settingsRect.xMax + ButtonGap, secondTop, secondaryWidth, height);
 
             GUIStyle jobStyle = showJobDetails ? selectedButtonStyle : buttonStyle;
             if (DrawButton(jobRect, new GUIContent("Job", "Job details"), jobStyle, !busy))
@@ -410,6 +417,17 @@ namespace EnvForge.Navigation.Cloud
             if (DrawButton(settingsRect, new GUIContent("Settings", "Training settings"), settingsStyle, !busy))
             {
                 ToggleTrainingSettings();
+            }
+
+            bool canCancel = activeJob?.CanCancel == true &&
+                (latestResult == null || IsCancellableResultStatus(latestResult.Status));
+            if (DrawButton(
+                cancelRect,
+                new GUIContent("Cancel", "Cancel cloud job"),
+                buttonStyle,
+                !busy && !resultFetchInFlight && canCancel))
+            {
+                _ = CancelActiveJobAsync();
             }
         }
 
@@ -460,12 +478,12 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Label("Editor Debug", debugTitleStyle, GUILayout.Height(34f));
             GUILayout.Label($"Status: {FormatDebugValue(status)}", debugInfoStyle);
             GUILayout.Label($"Submission: {FormatDebugValue(Shorten(submissionId, 48))}", debugInfoStyle);
-            GUILayout.Label($"API Base: {FormatDebugRawValue(apiClient?.BaseUrl)}", debugUrlStyle);
+            GUILayout.Label($"API Base: {FormatDebugRawValue(endpoints?.ApiBaseUri?.AbsoluteUri)}", debugUrlStyle);
             GUILayout.Label($"Fetch URL: {FormatDebugRawValue(BuildCurrentResultFetchUrl())}", debugUrlStyle);
             GUILayout.Label($"Stream: {FormatResultStreamSummary()}", debugInfoStyle);
             GUILayout.Label($"Stream error: {FormatDebugValue(lastResultStreamError)}", debugErrorStyle);
             GUILayout.Label($"Fetch error: {FormatDebugValue(lastResultFetchError)}", debugErrorStyle);
-            GUILayout.Label($"Fetch failures: {consecutiveResultFetchFailures} · retry {FormatNextResultRetry()}", debugInfoStyle);
+            GUILayout.Label($"Fetch failures: {consecutiveResultFetchFailures}", debugInfoStyle);
             GUILayout.Label($"Runtime start: {FormatDebugValue(sceneBuilder?.LastRuntimeStartSummary)} · {FormatDebugValue(inferenceController?.LastRuntimePoseSummary)}", debugInfoStyle);
             GUILayout.Label($"Replay: {FormatDebugValue(loadedReplaySummary)} · AI: {(inferenceController != null && inferenceController.IsRunning ? "running" : "off")}", debugInfoStyle);
             GUILayout.EndArea();
@@ -482,22 +500,14 @@ namespace EnvForge.Navigation.Cloud
 
         private string BuildCurrentResultFetchUrl()
         {
-            if (apiClient == null || string.IsNullOrWhiteSpace(submissionId))
+            if (endpoints == null || string.IsNullOrWhiteSpace(submissionId))
             {
                 return string.Empty;
             }
 
-            return apiClient.BuildResultUrl(submissionId);
-        }
-
-        private string FormatNextResultRetry()
-        {
-            if (nextResultPollAt <= Time.unscaledTime)
-            {
-                return "now";
-            }
-
-            return $"in {Mathf.Max(0f, nextResultPollAt - Time.unscaledTime):0}s";
+            return new Uri(
+                endpoints.ApiBaseUri,
+                $"results/{Uri.EscapeDataString(submissionId)}").AbsoluteUri;
         }
 
         private static string FormatDebugValue(string value)
@@ -521,243 +531,192 @@ namespace EnvForge.Navigation.Cloud
             return Rect.MinMaxRect(xMin, yMin, xMax, yMax);
         }
 
-        private IEnumerator SubmitAndTrain()
+        private void SetActiveJob(EmbodiedLabJob job)
+        {
+            if (activeJob != null)
+            {
+                activeJob.ResultUpdated -= OnActiveJobResultUpdated;
+                activeJob.Dispose();
+            }
+
+            activeJob = job;
+            if (activeJob == null)
+            {
+                return;
+            }
+
+            submissionId = activeJob.SubmissionId;
+            activeJob.ResultUpdated += OnActiveJobResultUpdated;
+        }
+
+        private async Awaitable SubmitAndTrainAsync()
         {
             busy = true;
+            SetActiveJob(null);
+            submissionId = null;
             latestResult = null;
-            resultWebSocketClient?.Stop();
-            resultStreamState = "not connected";
-            resultStreamEventCount = 0;
-            lastResultStreamStatus = null;
-            lastResultStreamReceivedAt = null;
-            lastResultStreamError = null;
-            lastResultFetchError = null;
-            consecutiveResultFetchFailures = 0;
-            resultStreamErrorReported = false;
-            autoDownloadStarted = false;
-            nextResultPollAt = Time.unscaledTime + ResultPollIntervalSeconds;
+            ResetResultPresentation();
             status = "Cloud: submitting scenario";
 
-            ScenarioBundleDto scenario = sceneBuilder.BuildScenarioBundle();
-            activeScenarioId = scenario.scenario_id;
+            ScenarioBundle scenario = sceneBuilder.BuildScenarioBundle();
+            activeScenarioId = scenario.ScenarioId;
             string trainerSummary = FormatScenarioTrainerSummary(scenario);
-            string settingsName = GetCurrentSettingsName();
-            bool failed = false;
-            yield return apiClient.SubmitScenario(
-                scenario,
-                response =>
-                {
-                    submissionId = response.submission_id;
-                    jobHistoryStore.UpsertSubmittedJob(submissionId, scenario, trainerSummary, settingsName);
-                    status = $"Cloud: submitted {submissionId}";
-                },
-                error =>
-                {
-                    failed = true;
-                    status = $"Cloud submit failed: {FormatUserFacingError(error)}";
-                });
-
-            if (failed || string.IsNullOrEmpty(submissionId))
+            try
+            {
+                EmbodiedLabJob job = await EmbodiedLabJob.SubmitAsync(
+                    endpoints,
+                    scenario,
+                    lifetimeCancellation.Token);
+                SetActiveJob(job);
+                jobHistoryStore.UpsertSubmittedJob(
+                    job.SubmissionId,
+                    job.CancelToken,
+                    scenario,
+                    trainerSummary,
+                    GetCurrentSettingsName());
+                status = $"Cloud: submitted {Shorten(job.SubmissionId, 18)}";
+            }
+            catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                status = $"Cloud submit failed: {FormatUserFacingError(exception.Message)}";
+                Debug.LogError($"Cloud submit failed: {exception}");
+                return;
+            }
+            finally
             {
                 busy = false;
-                yield break;
             }
 
-            status = "Cloud: starting training";
-            yield return apiClient.StartTraining(
-                submissionId,
-                _ => status = "Cloud: training queued",
-                error =>
-                {
-                    failed = true;
-                    status = $"Cloud train failed: {FormatUserFacingError(error)}";
-                });
+            _ = MonitorActiveJobAsync(activeJob);
+        }
 
-            busy = false;
-            if (!failed)
+        private async Awaitable ResumeActiveJobAsync(string source)
+        {
+            EmbodiedLabJob job = activeJob;
+            if (job == null)
             {
-                StartResultStream();
-                StartCoroutine(FetchLatestResult("submitted job"));
+                return;
+            }
+
+            status = $"Cloud: resuming {Shorten(job.SubmissionId, 18)}";
+            await FetchLatestResultAsync(source);
+            if (ReferenceEquals(job, activeJob) && !job.IsTerminal)
+            {
+                _ = MonitorActiveJobAsync(job);
             }
         }
 
-        private IEnumerator ResumeLatestJob()
+        private async Awaitable FetchLatestResultAsync(string source)
         {
-            restoredJobNeedsResume = false;
-            if (string.IsNullOrWhiteSpace(submissionId) || apiClient == null)
+            EmbodiedLabJob job = activeJob;
+            if (resultFetchInFlight || job == null)
             {
-                yield break;
+                return;
             }
 
-            status = $"Cloud: resuming {Shorten(submissionId, 18)}";
-            StartResultStream();
-            yield return FetchLatestResult("restored job");
-        }
-
-        private IEnumerator FetchLatestResult(string source)
-        {
-            if (string.IsNullOrWhiteSpace(submissionId) || apiClient == null)
-            {
-                yield break;
-            }
-
-            if (resultFetchInFlight)
-            {
-                pendingResultFetchSource = source;
-                yield break;
-            }
-
-            string requestedSubmissionId = submissionId;
             resultFetchInFlight = true;
-            bool found = false;
-            ResultDocumentDto fetchedResult = null;
-            yield return apiClient.GetResult(
-                requestedSubmissionId,
-                result =>
+            try
+            {
+                ResultDocument result = await job.RefreshAsync(lifetimeCancellation.Token);
+                if (!ReferenceEquals(job, activeJob))
                 {
-                    found = true;
-                    fetchedResult = result;
-                },
-                error =>
+                    return;
+                }
+
+                lastResultFetchError = null;
+                consecutiveResultFetchFailures = 0;
+                status = $"Cloud: fetched {FormatStatus(result.Status)}";
+                TryAutoDownloadArtifacts();
+            }
+            catch (OperationCanceledException)
+            {
+                if (ReferenceEquals(job, activeJob) && !lifetimeCancellation.IsCancellationRequested)
                 {
-                    HandleResultFetchError(source, requestedSubmissionId, error);
-                });
-            resultFetchInFlight = false;
-            nextResultPollAt = Time.unscaledTime + GetResultPollBackoffSeconds();
-
-            if (!string.Equals(requestedSubmissionId, submissionId, StringComparison.Ordinal))
-            {
-                Debug.Log($"Ignored result fetch for inactive job {Shorten(requestedSubmissionId, 18)}");
-                RestartPendingResultFetchIfNeeded();
-                yield break;
+                    status = $"Cloud: result fetch cancelled ({source})";
+                }
             }
-
-            if (!found || fetchedResult == null)
+            catch (Exception exception)
             {
-                RestartPendingResultFetchIfNeeded();
-                yield break;
-            }
+                if (!ReferenceEquals(job, activeJob))
+                {
+                    return;
+                }
 
-            lastResultFetchError = null;
-            consecutiveResultFetchFailures = 0;
-            if (!ApplyResultUpdate(fetchedResult, requestedSubmissionId, countStreamEvent: false))
+                lastResultFetchError = exception.Message;
+                consecutiveResultFetchFailures += 1;
+                status = $"Cloud: result unavailable ({source})";
+                Debug.LogWarning($"Result fetch failed for {job.SubmissionId}: {exception}");
+            }
+            finally
             {
-                RestartPendingResultFetchIfNeeded();
-                yield break;
+                resultFetchInFlight = false;
             }
-
-            status = $"Cloud: fetched {fetchedResult.status}";
-            TryAutoDownloadArtifacts();
-            RestartPendingResultFetchIfNeeded();
         }
 
-        private void RestartPendingResultFetchIfNeeded()
+        private async Awaitable MonitorActiveJobAsync(EmbodiedLabJob job)
         {
-            if (string.IsNullOrWhiteSpace(pendingResultFetchSource) ||
-                resultFetchInFlight ||
-                string.IsNullOrWhiteSpace(submissionId) ||
-                apiClient == null)
+            if (job == null || !ReferenceEquals(job, activeJob) || job.IsTerminal)
             {
-                return;
-            }
-
-            string source = pendingResultFetchSource;
-            pendingResultFetchSource = null;
-            StartCoroutine(FetchLatestResult(source));
-        }
-
-        private void PollLatestResultIfNeeded()
-        {
-            if (string.IsNullOrWhiteSpace(submissionId) ||
-                apiClient == null ||
-                resultFetchInFlight ||
-                IsTerminalResultStatus(latestResult?.status) ||
-                Time.unscaledTime < nextResultPollAt)
-            {
-                return;
-            }
-
-            StartCoroutine(FetchLatestResult("poll"));
-        }
-
-        private void StartResultStream()
-        {
-            StopResultStream("reconnecting");
-            string url = BuildResultWebSocketUrl(submissionId);
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                resultStreamState = "missing URL";
-                status = "Cloud: result stream URL missing";
-                Debug.LogWarning("Result stream URL is not configured. Set WebSocket Url Template on ApiSettings or NavigationSceneBuilder.");
-                showTrainingSettings = false;
-                showJobDetails = true;
-                showLibraryDetails = false;
                 return;
             }
 
             resultStreamState = "connecting";
             lastResultStreamError = null;
-            resultStreamErrorReported = false;
-            resultWebSocketClient.Start(url);
             status = "Cloud: listening for result";
-        }
-
-        private void ProcessResultStreamMessages()
-        {
-            if (resultWebSocketClient == null)
+            try
             {
-                return;
-            }
-
-            while (resultWebSocketClient.TryDequeue(out string message))
-            {
-                if (message.Contains("\"type\"", StringComparison.OrdinalIgnoreCase) &&
-                    message.Contains("\"connected\"", StringComparison.OrdinalIgnoreCase))
+                await job.WaitForCompletionAsync(lifetimeCancellation.Token);
+                if (ReferenceEquals(job, activeJob))
                 {
-                    resultStreamState = "connected";
-                    status = "Cloud: result stream connected";
-                    continue;
+                    resultStreamState = "closed";
+                    TryAutoDownloadArtifacts();
                 }
-
-                ResultDocumentDto result = JsonUtilityBridge.FromJson<ResultDocumentDto>(message);
-                if (string.IsNullOrWhiteSpace(result?.submission_id) ||
-                    string.IsNullOrWhiteSpace(result.status))
-                {
-                    Debug.LogWarning($"Ignored result stream message: {Shorten(message, 160)}");
-                    continue;
-                }
-
-                ApplyResultUpdate(result, submissionId);
             }
-
-            string streamError = resultWebSocketClient.LastError;
-            if (!resultStreamErrorReported && !string.IsNullOrWhiteSpace(streamError))
+            catch (OperationCanceledException)
             {
-                resultStreamErrorReported = true;
-                lastResultStreamError = streamError;
-                if (IsExpectedResultStreamClose(streamError))
+                if (ReferenceEquals(job, activeJob) && !lifetimeCancellation.IsCancellationRequested)
                 {
-                    StopResultStream("closed");
-                    status = "Cloud: result stream closed";
+                    resultStreamState = "stopped";
+                }
+            }
+            catch (Exception exception)
+            {
+                if (!ReferenceEquals(job, activeJob))
+                {
                     return;
                 }
 
+                lastResultStreamError = exception.Message;
                 resultStreamState = "failed";
-                status = $"Result stream failed: {FormatUserFacingError(streamError)}";
-                Debug.LogWarning($"Result stream failed: {streamError}");
+                status = $"Result stream failed: {FormatUserFacingError(exception.Message)}";
+                Debug.LogWarning($"Result stream failed for {job.SubmissionId}: {exception}");
             }
         }
 
-        private bool ApplyResultUpdate(ResultDocumentDto result, string expectedSubmissionId = null, bool countStreamEvent = true)
+        private void OnActiveJobResultUpdated(ResultDocument result)
         {
-            string resultSubmissionId = string.IsNullOrWhiteSpace(result?.submission_id)
-                ? expectedSubmissionId ?? submissionId
-                : result.submission_id;
+            ApplyResultUpdate(
+                result,
+                submissionId,
+                countStreamEvent: !resultFetchInFlight);
+        }
+
+        private bool ApplyResultUpdate(
+            ResultDocument result,
+            string expectedSubmissionId = null,
+            bool countStreamEvent = true)
+        {
+            string resultSubmissionId = result?.SubmissionId;
             string activeSubmissionId = expectedSubmissionId ?? submissionId;
-            if (!string.IsNullOrWhiteSpace(activeSubmissionId) &&
-                !string.Equals(resultSubmissionId, activeSubmissionId, StringComparison.Ordinal))
+            if (result == null ||
+                string.IsNullOrWhiteSpace(resultSubmissionId) ||
+                (!string.IsNullOrWhiteSpace(activeSubmissionId) &&
+                 !string.Equals(resultSubmissionId, activeSubmissionId, StringComparison.Ordinal)))
             {
-                Debug.Log($"Ignored result for inactive job {Shorten(resultSubmissionId, 18)}; active {Shorten(activeSubmissionId, 18)}");
                 return false;
             }
 
@@ -767,14 +726,17 @@ namespace EnvForge.Navigation.Cloud
                 resultStreamEventCount += 1;
             }
 
-            lastResultStreamStatus = result.status;
-            lastResultStreamReceivedAt = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            string resultStatus = FormatStatus(result.Status);
+            lastResultStreamStatus = resultStatus;
+            lastResultStreamReceivedAt = DateTime.Now.ToString(
+                "HH:mm:ss",
+                CultureInfo.InvariantCulture);
             jobHistoryStore.UpsertResult(resultSubmissionId, result);
-            status = $"Cloud: {result.status}";
+            status = $"Cloud: {resultStatus}";
 
-            if (IsTerminalResultStatus(result.status))
+            if (IsTerminalResultStatus(result.Status))
             {
-                StopResultStream("closed");
+                resultStreamState = "closed";
                 TryAutoDownloadArtifacts();
             }
             else
@@ -785,6 +747,52 @@ namespace EnvForge.Navigation.Cloud
             return true;
         }
 
+        private async Awaitable CancelActiveJobAsync()
+        {
+            EmbodiedLabJob job = activeJob;
+            if (job?.CanCancel != true)
+            {
+                status = "Cloud: cancellation capability unavailable";
+                return;
+            }
+
+            busy = true;
+            status = "Cloud: requesting cancellation";
+            try
+            {
+                ResultDocument result = await job.CancelAsync(lifetimeCancellation.Token);
+                if (ReferenceEquals(job, activeJob))
+                {
+                    status = $"Cloud: {FormatStatus(result.Status)}";
+                }
+            }
+            catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                status = $"Cloud cancel failed: {FormatUserFacingError(exception.Message)}";
+                Debug.LogError($"Cloud cancel failed for {job.SubmissionId}: {exception}");
+            }
+            finally
+            {
+                busy = false;
+            }
+        }
+
+        private void ResetResultPresentation()
+        {
+            resultStreamState = "not connected";
+            resultStreamEventCount = 0;
+            lastResultStreamStatus = null;
+            lastResultStreamReceivedAt = null;
+            lastResultStreamError = null;
+            lastResultFetchError = null;
+            consecutiveResultFetchFailures = 0;
+            autoDownloadStarted = false;
+        }
+
         private void TryAutoDownloadArtifacts()
         {
             if (autoDownloadStarted || busy || !IsCompletedResult())
@@ -792,209 +800,173 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            ResultArtifactsDto artifacts = GetResultArtifacts();
-            if (artifacts == null || (artifacts.replay_bundle == null && artifacts.onnx_model == null))
+            ResultArtifacts artifacts = GetResultArtifacts();
+            if (artifacts == null ||
+                (artifacts.ReplayBundle == null &&
+                 artifacts.OnnxModel == null &&
+                 artifacts.SentisModel == null &&
+                 artifacts.Model == null))
             {
                 return;
             }
 
-            EnvForgeJobRecordDto activeJob = GetActiveJobRecord();
-            if (activeJob != null &&
-                !string.IsNullOrWhiteSpace(activeJob.local_onnx_path) &&
-                !string.IsNullOrWhiteSpace(activeJob.local_replay_manifest_path) &&
-                File.Exists(activeJob.local_replay_manifest_path) &&
-                File.Exists(activeJob.local_onnx_path))
+            EnvForgeJobRecordDto record = GetActiveJobRecord();
+            if (record != null &&
+                !string.IsNullOrWhiteSpace(record.local_onnx_path) &&
+                !string.IsNullOrWhiteSpace(record.local_replay_manifest_path) &&
+                File.Exists(record.local_replay_manifest_path) &&
+                File.Exists(record.local_onnx_path))
             {
                 return;
             }
 
             autoDownloadStarted = true;
-            StartCoroutine(DownloadAvailableArtifacts());
+            _ = DownloadAvailableArtifactsAsync();
         }
 
-        private IEnumerator DownloadReplay()
+        private async Awaitable DownloadReplayAsync()
         {
-            busy = true;
-            status = "Cloud: downloading replay manifest";
-            ArtifactLocationDto replayBundle = GetResultArtifacts().replay_bundle;
-            string manifestPath = GetLocalReplayManifestPath();
-            ReplayBundleManifestDto manifest = null;
-            yield return artifactDownloader.DownloadFile(
-                replayBundle,
-                manifestPath,
-                savedPath =>
-                {
-                    string manifestJson = File.ReadAllText(savedPath);
-                    manifest = ScenarioBundleSerializer.FromReplayBundleManifestJson(manifestJson);
-                },
-                error =>
-                {
-                    busy = false;
-                    status = $"Replay download failed: {FormatUserFacingError(error)}";
-                });
-            if (manifest == null)
+            EmbodiedLabJob job = activeJob;
+            if (job == null || GetResultArtifacts()?.ReplayBundle == null)
             {
-                yield break;
+                status = "Cloud: replay artifact unavailable";
+                return;
             }
 
-            ConfigureActiveReplayBundle(replayBundle, manifest, manifestPath);
-            jobHistoryStore.SetLocalReplayManifestPath(submissionId, manifestPath);
-            loadedReplaySummary = $"Replay manifest ready: {manifest.chunks?.Count ?? 0} chunks";
-            status = "Cloud: replay manifest ready";
-            busy = false;
+            busy = true;
+            status = "Cloud: downloading replay manifest";
+            string manifestPath = GetLocalReplayManifestPath();
+            try
+            {
+                await job.DownloadReplayBundleAsync(
+                    manifestPath,
+                    lifetimeCancellation.Token);
+                if (!ReferenceEquals(job, activeJob))
+                {
+                    return;
+                }
+
+                ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(manifestPath);
+                ConfigureActiveReplayBundle(manifest, manifestPath);
+                jobHistoryStore.SetLocalReplayManifestPath(submissionId, manifestPath);
+                loadedReplaySummary = $"Replay manifest ready: {manifest.Chunks?.Count ?? 0} chunks";
+                status = "Cloud: replay manifest ready";
+            }
+            catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                status = $"Replay download failed: {FormatUserFacingError(exception.Message)}";
+                Debug.LogError($"Replay download failed: {exception}");
+            }
+            finally
+            {
+                busy = false;
+            }
         }
 
-        private IEnumerator DownloadAvailableArtifacts()
+        private async Awaitable DownloadAvailableArtifactsAsync()
         {
             if (!IsCompletedResult())
             {
-                status = "Cloud: wait for DONE before download";
+                status = "Cloud: wait for completed before download";
                 showTrainingSettings = false;
                 showJobDetails = true;
                 showLibraryDetails = false;
-                yield break;
+                return;
             }
 
-            ResultArtifactsDto artifacts = GetResultArtifacts();
-            if (artifacts == null ||
-                (artifacts.replay_bundle == null && artifacts.onnx_model == null))
+            ResultArtifacts artifacts = GetResultArtifacts();
+            if (artifacts == null)
             {
                 status = "Cloud: no downloadable artifacts";
                 showTrainingSettings = false;
                 showJobDetails = true;
                 showLibraryDetails = false;
-                yield break;
+                return;
             }
 
-            if (artifacts.replay_bundle != null)
+            if (artifacts.ReplayBundle != null)
             {
-                yield return DownloadReplay();
+                await DownloadReplayAsync();
             }
 
-            if (artifacts.onnx_model != null)
+            if (artifacts.OnnxModel != null ||
+                artifacts.SentisModel != null ||
+                artifacts.Model != null)
             {
-                yield return DownloadModelArtifacts();
+                await DownloadModelArtifactsAsync();
             }
         }
 
-        private IEnumerator DownloadModelArtifacts()
+        private async Awaitable DownloadModelArtifactsAsync()
         {
+            EmbodiedLabJob job = activeJob;
+            if (job == null)
+            {
+                return;
+            }
+
             busy = true;
-            string outputDir = Path.Combine(Application.persistentDataPath, "EnvForge", GetSafeSubmissionDirectoryName(submissionId));
-            ResultArtifactsDto artifacts = GetResultArtifacts();
-            if (artifacts.onnx_model != null)
+            string outputDir = Path.Combine(
+                Application.persistentDataPath,
+                "EnvForge",
+                GetSafeSubmissionDirectoryName(submissionId));
+            string localPath = Path.Combine(outputDir, "policy.onnx");
+            status = "Cloud: downloading policy.onnx";
+            try
             {
-                yield return DownloadArtifactFile(
-                    artifacts.onnx_model,
-                    Path.Combine(outputDir, "policy.onnx"),
-                    savedPath => jobHistoryStore.SetLocalOnnxPath(submissionId, savedPath));
+                await job.DownloadModelAsync(localPath, lifetimeCancellation.Token);
+                if (ReferenceEquals(job, activeJob))
+                {
+                    jobHistoryStore.SetLocalOnnxPath(submissionId, localPath);
+                    status = $"Cloud: saved {localPath}";
+                }
             }
-
-            busy = false;
+            catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                status = $"Model download failed: {FormatUserFacingError(exception.Message)}";
+                Debug.LogError($"Model download failed: {exception}");
+            }
+            finally
+            {
+                busy = false;
+            }
         }
 
-        private ResultArtifactsDto GetResultArtifacts()
+        private ResultArtifacts GetResultArtifacts()
         {
-            if (latestResult?.artifacts != null)
-            {
-                return latestResult.artifacts;
-            }
-
-            return latestResult?.result_bundle?.artifacts;
+            return latestResult?.ResultBundle?.Artifacts;
         }
 
         private bool IsCompletedResult()
         {
-            return string.Equals(latestResult?.status, "completed", StringComparison.OrdinalIgnoreCase);
+            return latestResult?.Status == ResultStatus.Completed;
         }
 
-        private void HandleResultFetchError(string source, string requestedSubmissionId, string error)
+        private static bool IsTerminalResultStatus(ResultStatus? resultStatus)
         {
-            if (!string.Equals(requestedSubmissionId, submissionId, StringComparison.Ordinal))
-            {
-                Debug.Log($"Ignored result fetch error for inactive job {Shorten(requestedSubmissionId, 18)}: {FormatUserFacingError(error)}");
-                return;
-            }
-
-            consecutiveResultFetchFailures += 1;
-            status = $"Cloud: result unavailable ({source})";
-            bool repeatedError = string.Equals(lastResultFetchError, error, StringComparison.Ordinal);
-            lastResultFetchError = error;
-
-            if (!repeatedError)
-            {
-                Debug.LogWarning($"Result fetch failed for {submissionId}: {error}");
-            }
-
-            if (IsMissingResultError(error))
-            {
-                latestResult = new ResultDocumentDto
-                {
-                    submission_id = requestedSubmissionId,
-                    status = "missing",
-                };
-                jobHistoryStore?.UpsertResult(requestedSubmissionId, latestResult);
-                StopResultStream("missing result");
-            }
+            return resultStatus == ResultStatus.Completed ||
+                resultStatus == ResultStatus.Failed ||
+                resultStatus == ResultStatus.Cancelled;
         }
 
-        private float GetResultPollBackoffSeconds()
+        private static bool IsCancellableResultStatus(ResultStatus resultStatus)
         {
-            if (IsTerminalResultStatus(latestResult?.status))
-            {
-                return ResultPollIntervalSeconds;
-            }
-
-            if (IsNetworkDestinationError(lastResultFetchError))
-            {
-                return ResultPollIntervalSeconds * 4f;
-            }
-
-            if (consecutiveResultFetchFailures >= 3)
-            {
-                return ResultPollIntervalSeconds * 2f;
-            }
-
-            return ResultPollIntervalSeconds;
+            return resultStatus == ResultStatus.Queued ||
+                resultStatus == ResultStatus.Starting ||
+                resultStatus == ResultStatus.Running;
         }
 
-        private void StopResultStream(string nextState)
+        private static string FormatStatus(ResultStatus resultStatus)
         {
-            resultWebSocketClient?.Stop();
-            resultStreamState = string.IsNullOrWhiteSpace(nextState) ? "closed" : nextState;
-        }
-
-        private static bool IsTerminalResultStatus(string resultStatus)
-        {
-            return string.Equals(resultStatus, "completed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resultStatus, "failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resultStatus, "cancelled", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resultStatus, "canceled", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resultStatus, "deleted", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(resultStatus, "missing", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static bool IsExpectedResultStreamClose(string error)
-        {
-            return !string.IsNullOrWhiteSpace(error) &&
-                error.Contains("closed the WebSocket connection without completing the close handshake", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static bool IsMissingResultError(string error)
-        {
-            return !string.IsNullOrWhiteSpace(error) &&
-                (error.Contains("404", StringComparison.OrdinalIgnoreCase) ||
-                 error.Contains("410", StringComparison.OrdinalIgnoreCase) ||
-                 error.Contains("result not found", StringComparison.OrdinalIgnoreCase) ||
-                 error.Contains("result deleted", StringComparison.OrdinalIgnoreCase));
-        }
-
-        private static bool IsNetworkDestinationError(string error)
-        {
-            return !string.IsNullOrWhiteSpace(error) &&
-                (error.Contains("Cannot resolve destination host", StringComparison.OrdinalIgnoreCase) ||
-                 error.Contains("Name or service not known", StringComparison.OrdinalIgnoreCase) ||
-                 error.Contains("No such host", StringComparison.OrdinalIgnoreCase));
+            return resultStatus.ToString().ToLowerInvariant();
         }
 
         private static string FormatTrainingCoreSummary(NavigationTrainingSettings settings)
@@ -1059,120 +1031,117 @@ namespace EnvForge.Navigation.Cloud
         }
 
         private void ConfigureActiveReplayBundle(
-            ArtifactLocationDto manifestArtifact,
-            ReplayBundleManifestDto manifest,
+            ReplayBundleManifest manifest,
             string manifestPath)
         {
-            activeReplayManifestArtifact = manifestArtifact;
-            activeReplayManifest = manifest;
             activeReplayManifestPath = manifestPath;
             activeReplayChunks.Clear();
-            activeReplayTotalSteps = 0;
             activeReplayChunkIndex = -1;
 
-            if (manifest?.chunks == null)
+            if (manifest?.Chunks == null)
             {
                 return;
             }
 
-            foreach (ReplayBundleChunkDto chunk in manifest.chunks)
+            foreach (ReplayBundleChunk chunk in manifest.Chunks)
             {
-                if (chunk == null || string.IsNullOrWhiteSpace(chunk.path))
+                if (chunk == null || string.IsNullOrWhiteSpace(chunk.Path))
                 {
                     continue;
                 }
 
                 activeReplayChunks.Add(chunk);
-                activeReplayTotalSteps += Mathf.Max(0, chunk.step_count);
             }
         }
 
-        private IEnumerator LoadReplayChunkAt(int chunkIndex, bool autoPlay, bool startAtEnd)
+        private async Awaitable LoadReplayChunkAtAsync(
+            int chunkIndex,
+            bool autoPlay,
+            bool startAtEnd)
         {
             if (replayChunkLoadInFlight)
             {
-                yield break;
+                return;
             }
 
             if (chunkIndex < 0 || chunkIndex >= activeReplayChunks.Count)
             {
                 status = chunkIndex < 0 ? "Replay: first chunk" : "Replay: finished";
-                yield break;
+                return;
             }
 
             replayChunkLoadInFlight = true;
             busy = true;
-
-            ReplayBundleChunkDto chunk = activeReplayChunks[chunkIndex];
-            string localChunkPath = GetLocalReplayChunkPath(chunk);
-            if (string.IsNullOrEmpty(localChunkPath))
+            try
             {
-                status = "Replay output path is unavailable";
-                FinishReplayChunkLoad();
-                yield break;
-            }
-
-            string localChunkDir = Path.GetDirectoryName(localChunkPath);
-            if (!string.IsNullOrEmpty(localChunkDir))
-            {
-                Directory.CreateDirectory(localChunkDir);
-            }
-
-            if (!File.Exists(localChunkPath))
-            {
-                if (activeReplayManifestArtifact == null)
+                ReplayBundleChunk chunk = activeReplayChunks[chunkIndex];
+                string localChunkPath = GetLocalReplayChunkPath(chunk);
+                if (string.IsNullOrEmpty(localChunkPath))
                 {
-                    status = "Replay artifact metadata missing";
-                    FinishReplayChunkLoad();
-                    yield break;
+                    status = "Replay output path is unavailable";
+                    return;
                 }
 
-                ArtifactLocationDto chunkArtifact = BuildReplayChunkArtifact(activeReplayManifestArtifact, chunk.path, chunk.format);
-                bool failed = false;
-                status = $"Cloud: downloading replay {FormatReplayChunkLabel(chunk)}";
-                yield return artifactDownloader.DownloadFile(
-                    chunkArtifact,
-                    localChunkPath,
-                    _ => { },
-                    error =>
+                if (!File.Exists(localChunkPath))
+                {
+                    EmbodiedLabJob job = activeJob;
+                    if (job == null)
                     {
-                        failed = true;
-                        status = $"Replay chunk download failed: {FormatUserFacingError(error)}";
-                    });
+                        status = "Replay job handle is unavailable";
+                        return;
+                    }
 
-                if (failed)
-                {
-                    FinishReplayChunkLoad();
-                    yield break;
+                    status = $"Cloud: downloading replay {FormatReplayChunkLabel(chunk)}";
+                    await job.DownloadReplayChunkAsync(
+                        chunk,
+                        localChunkPath,
+                        lifetimeCancellation.Token);
+                    if (!ReferenceEquals(job, activeJob))
+                    {
+                        return;
+                    }
                 }
-            }
 
-            List<ReplayLogStepDto> chunkSteps = new();
-            foreach (string line in ReadReplayChunkLines(localChunkPath))
+                IReadOnlyList<ReplayLogStep> chunkSteps =
+                    EmbodiedLabReplay.ReadSteps(localChunkPath);
+                List<ReplayLogStep> displaySteps = EnvForgeReplayDisplayBuilder.BuildDisplaySteps(
+                    chunkSteps,
+                    ReplayDisplayEnvIndex);
+                EnvForgeJobRecordDto record = jobHistoryStore.SetLocalReplayBundlePaths(
+                    submissionId,
+                    activeReplayManifestPath,
+                    localChunkPath);
+                activeReplayScenarioSource = ApplyReplayScenario(record);
+                replayPlayer.LoadWindow(
+                    displaySteps,
+                    chunkIndex,
+                    activeReplayChunks.Count,
+                    0,
+                    displaySteps.Count,
+                    $"{FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
+                    autoPlay,
+                    startAtEnd);
+                activeReplayChunkIndex = chunkIndex;
+                loadedReplaySummary = EnvForgeReplayDisplayBuilder.FormatSummary(
+                    displaySteps,
+                    $"Replay {FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
+                    activeReplayScenarioSource,
+                    Shorten);
+                status = $"Cloud: replay {FormatReplayChunkLabel(chunk)} loaded";
+            }
+            catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
             {
-                chunkSteps.Add(ReplayLogSerializer.FromReplayLogStepJson(line));
+                return;
             }
-
-            List<ReplayLogStepDto> displaySteps = EnvForgeReplayDisplayBuilder.BuildDisplaySteps(chunkSteps, ReplayDisplayEnvIndex);
-            EnvForgeJobRecordDto job = jobHistoryStore.SetLocalReplayBundlePaths(submissionId, activeReplayManifestPath, localChunkPath);
-            activeReplayScenarioSource = ApplyReplayScenario(job);
-            replayPlayer.LoadWindow(
-                displaySteps,
-                chunkIndex,
-                activeReplayChunks.Count,
-                0,
-                displaySteps.Count,
-                $"{FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
-                autoPlay,
-                startAtEnd);
-            activeReplayChunkIndex = chunkIndex;
-            loadedReplaySummary = EnvForgeReplayDisplayBuilder.FormatSummary(
-                displaySteps,
-                $"Replay {FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
-                activeReplayScenarioSource,
-                Shorten);
-            status = $"Cloud: replay {FormatReplayChunkLabel(chunk)} loaded";
-            FinishReplayChunkLoad();
+            catch (Exception exception)
+            {
+                status = $"Replay chunk load failed: {FormatUserFacingError(exception.Message)}";
+                Debug.LogError($"Replay chunk load failed: {exception}");
+            }
+            finally
+            {
+                FinishReplayChunkLoad();
+            }
         }
 
         private void FinishReplayChunkLoad()
@@ -1181,7 +1150,7 @@ namespace EnvForge.Navigation.Cloud
             busy = false;
         }
 
-        private string GetLocalReplayChunkPath(ReplayBundleChunkDto chunk)
+        private string GetLocalReplayChunkPath(ReplayBundleChunk chunk)
         {
             string manifestPath = activeReplayManifestPath;
             if (string.IsNullOrWhiteSpace(manifestPath))
@@ -1192,20 +1161,9 @@ namespace EnvForge.Navigation.Cloud
             string outputDir = Path.GetDirectoryName(manifestPath);
             return string.IsNullOrEmpty(outputDir)
                 ? string.Empty
-                : TryBuildSafeChildPath(outputDir, chunk.path, out string localPath)
+                : TryBuildSafeChildPath(outputDir, chunk.Path, out string localPath)
                     ? localPath
                     : string.Empty;
-        }
-
-        private int GetReplayChunkGlobalStartStepIndex(int chunkIndex)
-        {
-            int start = 0;
-            for (int i = 0; i < chunkIndex && i < activeReplayChunks.Count; i++)
-            {
-                start += Mathf.Max(0, activeReplayChunks[i].step_count);
-            }
-
-            return start;
         }
 
         private void HandleReplayWindowBoundaryRequested(int direction, bool autoPlay)
@@ -1228,72 +1186,18 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            StartCoroutine(LoadReplayChunkAt(nextIndex, autoPlay, direction < 0));
+            _ = LoadReplayChunkAtAsync(nextIndex, autoPlay, direction < 0);
         }
 
-        private static string FormatReplayChunkLabel(ReplayBundleChunkDto chunk)
+        private static string FormatReplayChunkLabel(ReplayBundleChunk chunk)
         {
             if (chunk == null)
             {
                 return "chunk";
             }
 
-            string phase = string.IsNullOrWhiteSpace(chunk.phase) ? "replay" : chunk.phase;
-            return $"{phase} {FormatSteps(chunk.checkpoint_step)}";
-        }
-
-        private static ArtifactLocationDto BuildReplayChunkArtifact(
-            ArtifactLocationDto manifestArtifact,
-            string chunkPath,
-            string format)
-        {
-            string basePath = manifestArtifact.path;
-            int slashIndex = basePath.LastIndexOf('/');
-            string replayRoot = slashIndex >= 0 ? basePath[..slashIndex] : string.Empty;
-            string objectPath = string.IsNullOrWhiteSpace(replayRoot)
-                ? chunkPath
-                : $"{replayRoot}/{chunkPath}";
-
-            return new ArtifactLocationDto
-            {
-                storage = manifestArtifact.storage,
-                bucket = manifestArtifact.bucket,
-                path = objectPath,
-                format = string.IsNullOrWhiteSpace(format) ? "jsonl.gz" : format,
-            };
-        }
-
-        private static IEnumerable<string> ReadReplayChunkLines(string path)
-        {
-            using (Stream source = File.OpenRead(path))
-            {
-                using Stream readable = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
-                    ? new GZipStream(source, CompressionMode.Decompress)
-                    : source;
-                using StreamReader reader = new(readable);
-                string line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        yield return line;
-                    }
-                }
-            }
-        }
-
-        private IEnumerator DownloadArtifactFile(ArtifactLocationDto artifact, string localPath, Action<string> onSaved = null)
-        {
-            status = $"Cloud: downloading {Path.GetFileName(localPath)}";
-            yield return artifactDownloader.DownloadFile(
-                artifact,
-                localPath,
-                savedPath =>
-                {
-                    onSaved?.Invoke(savedPath);
-                    status = $"Cloud: saved {Path.GetFileName(savedPath)}";
-                },
-                error => status = $"Download failed: {FormatUserFacingError(error)}");
+            string phase = chunk.Phase.ToString().ToLowerInvariant();
+            return $"{phase} {FormatSteps(chunk.CheckpointStep)}";
         }
 
         private void DrawJobDetails(Rect panelRect)
@@ -1303,7 +1207,9 @@ namespace EnvForge.Navigation.Cloud
             jobDetailsScroll = GUILayout.BeginScrollView(jobDetailsScroll);
 
             GUILayout.Label("Result", statusStyle);
-            GUILayout.Label($"Status: {latestResult?.status ?? "none"}", detailStyle);
+            GUILayout.Label(
+                $"Status: {(latestResult == null ? "none" : FormatStatus(latestResult.Status))}",
+                detailStyle);
             GUILayout.Label(FormatResultStreamSummary(), detailStyle);
             if (HasDebugOverlayInfo())
             {
@@ -1362,7 +1268,7 @@ namespace EnvForge.Navigation.Cloud
             GUI.enabled = previousTopEnabled && !libraryRefreshInFlight && jobHistoryStore != null && jobHistoryStore.Jobs.Count > 0;
             if (GUILayout.Button(libraryRefreshInFlight ? "Refreshing" : "Refresh History", buttonStyle, GUILayout.Height(ButtonHeight)))
             {
-                StartCoroutine(RefreshLibraryResults());
+                _ = RefreshLibraryResultsAsync();
             }
 
             GUI.enabled = previousTopEnabled;
@@ -1397,14 +1303,14 @@ namespace EnvForge.Navigation.Cloud
                     if (GUILayout.Button("Replay", buttonStyle, GUILayout.Height(ButtonHeight)))
                     {
                         SelectLibraryJob(job, reconnect: false);
-                        StartCoroutine(LoadLatestReplay());
+                        _ = LoadLatestReplayAsync();
                     }
 
                     GUI.enabled = previousEnabled && !string.IsNullOrWhiteSpace(job.submission_id);
                     if (GUILayout.Button("Fetch", buttonStyle, GUILayout.Height(ButtonHeight)))
                     {
                         SelectLibraryJob(job, reconnect: false);
-                        StartCoroutine(FetchLatestResult("library"));
+                        _ = FetchLatestResultAsync("library");
                     }
 
                     GUI.enabled = previousEnabled && !string.IsNullOrWhiteSpace(job.submission_id);
@@ -1518,9 +1424,18 @@ namespace EnvForge.Navigation.Cloud
             }
 
             EnvForgeJobRecordDto recentJob = jobHistoryStore.MostRecentRecord;
-            submissionId = recentJob?.submission_id;
+            SetActiveJob(null);
+            submissionId = null;
             activeScenarioId = recentJob?.scenario_id;
             latestResult = null;
+            ResetResultPresentation();
+            if (recentJob != null && endpoints != null)
+            {
+                SetActiveJob(EmbodiedLabJob.Restore(
+                    endpoints,
+                    recentJob.submission_id,
+                    recentJob.cancel_token));
+            }
         }
 
         private void RemoveLibraryJob(EnvForgeJobRecordDto job)
@@ -1598,22 +1513,23 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
+            if (endpoints == null)
+            {
+                status = "Cloud: endpoints are not configured";
+                return;
+            }
+
             EnvForgeJobRecordDto selectedJob = jobHistoryStore.FindJob(job.submission_id) ?? job;
-            StopResultStream("selected job");
-            submissionId = selectedJob.submission_id;
+            SetActiveJob(EmbodiedLabJob.Restore(
+                endpoints,
+                selectedJob.submission_id,
+                selectedJob.cancel_token));
             activeScenarioId = selectedJob.scenario_id;
             loadedReplaySummary = !string.IsNullOrWhiteSpace(selectedJob.local_replay_manifest_path)
                 ? $"manifest saved for {Shorten(selectedJob.submission_id, 18)}"
                 : null;
             latestResult = null;
-            autoDownloadStarted = false;
-            lastResultFetchError = null;
-            consecutiveResultFetchFailures = 0;
-            resultStreamEventCount = 0;
-            lastResultStreamStatus = null;
-            lastResultStreamReceivedAt = null;
-            lastResultStreamError = null;
-            resultStreamErrorReported = false;
+            ResetResultPresentation();
             pendingDeleteSubmissionId = null;
             libraryNameSubmissionId = null;
             libraryNameText = null;
@@ -1621,21 +1537,19 @@ namespace EnvForge.Navigation.Cloud
             {
                 settingsNameText = selectedJob.settings_name;
             }
-
             status = $"Cloud: selected {Shorten(submissionId, 18)}";
 
             if (reconnect)
             {
-                StartResultStream();
-                StartCoroutine(FetchLatestResult("library"));
+                _ = ResumeActiveJobAsync("library");
             }
         }
 
-        private IEnumerator RefreshLibraryResults()
+        private async Awaitable RefreshLibraryResultsAsync()
         {
-            if (libraryRefreshInFlight || jobHistoryStore == null || apiClient == null)
+            if (libraryRefreshInFlight || jobHistoryStore == null || endpoints == null)
             {
-                yield break;
+                return;
             }
 
             libraryRefreshInFlight = true;
@@ -1648,48 +1562,44 @@ namespace EnvForge.Navigation.Cloud
                     continue;
                 }
 
-                yield return RefreshLibraryJobResult(job.submission_id);
+                await RefreshLibraryJobResultAsync(job);
             }
 
             libraryRefreshInFlight = false;
             status = "Library: history refreshed";
         }
 
-        private IEnumerator RefreshLibraryJobResult(string requestedSubmissionId)
+        private async Awaitable RefreshLibraryJobResultAsync(EnvForgeJobRecordDto record)
         {
-            bool found = false;
-            ResultDocumentDto fetchedResult = null;
-            string fetchError = null;
-            yield return apiClient.GetResult(
-                requestedSubmissionId,
-                result =>
-                {
-                    found = true;
-                    fetchedResult = result;
-                },
-                error => fetchError = error);
-
-            if (found && fetchedResult != null)
+            string requestedSubmissionId = record?.submission_id;
+            if (string.IsNullOrWhiteSpace(requestedSubmissionId))
             {
-                try
+                return;
+            }
+
+            using EmbodiedLabJob job = EmbodiedLabJob.Restore(
+                endpoints,
+                requestedSubmissionId,
+                record.cancel_token);
+            try
+            {
+                ResultDocument fetchedResult = await job.RefreshAsync(lifetimeCancellation.Token);
+                if (string.Equals(requestedSubmissionId, submissionId, StringComparison.Ordinal))
                 {
-                    if (string.Equals(requestedSubmissionId, submissionId, StringComparison.Ordinal))
-                    {
-                        ApplyResultUpdate(fetchedResult, requestedSubmissionId, countStreamEvent: false);
-                    }
-                    else
-                    {
-                        jobHistoryStore.UpsertResult(requestedSubmissionId, fetchedResult);
-                    }
+                    ApplyResultUpdate(fetchedResult, requestedSubmissionId, countStreamEvent: false);
                 }
-                catch (Exception ex)
+                else
                 {
-                    Debug.LogWarning($"Library refresh update failed for {Shorten(requestedSubmissionId, 18)}: {ex.Message}");
+                    jobHistoryStore.UpsertResult(requestedSubmissionId, fetchedResult);
                 }
             }
-            else if (!string.IsNullOrWhiteSpace(fetchError))
+            catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
             {
-                Debug.LogWarning($"Library refresh failed for {Shorten(requestedSubmissionId, 18)}: {fetchError}");
+                return;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Library refresh failed for {Shorten(requestedSubmissionId, 18)}: {exception.Message}");
             }
         }
 
@@ -1753,15 +1663,19 @@ namespace EnvForge.Navigation.Cloud
         {
             if (IsCompletedResult())
             {
-                ResultArtifactsDto artifacts = GetResultArtifacts();
-                string replay = artifacts?.replay_bundle == null ? "replay missing" : "replay available";
-                string model = artifacts?.onnx_model == null ? "model missing" : "model available";
+                ResultArtifacts artifacts = GetResultArtifacts();
+                string replay = artifacts?.ReplayBundle == null ? "replay missing" : "replay available";
+                string model = artifacts?.OnnxModel == null &&
+                    artifacts?.SentisModel == null &&
+                    artifacts?.Model == null
+                        ? "model missing"
+                        : "model available";
                 return $"Cloud: {replay} · {model}";
             }
 
-            if (IsTerminalResultStatus(latestResult?.status))
+            if (IsTerminalResultStatus(latestResult?.Status))
             {
-                return $"Cloud: {latestResult.status} · artifacts unavailable";
+                return $"Cloud: {FormatStatus(latestResult.Status)} · artifacts unavailable";
             }
 
             return "Cloud: replay waiting · model waiting";
@@ -1978,17 +1892,17 @@ namespace EnvForge.Navigation.Cloud
 
         private string FormatProgressSummary()
         {
-            ProgressDto progress = latestResult?.progress;
+            Progress progress = latestResult?.Progress;
             if (progress == null)
             {
                 return "Progress: none";
             }
 
-            string steps = progress.total_steps > 0
-                ? $"{FormatSteps(progress.current_step)}/{FormatSteps(progress.total_steps)}"
-                : FormatSteps(progress.current_step);
-            string phase = string.IsNullOrWhiteSpace(progress.phase) ? latestResult?.status : progress.phase;
-            return $"Progress: {phase ?? "unknown"} · {steps}";
+            string steps = progress.TotalSteps > 0
+                ? $"{FormatSteps(progress.CurrentStep)}/{FormatSteps(progress.TotalSteps)}"
+                : FormatSteps(progress.CurrentStep);
+            string phase = FormatStatus(progress.Phase);
+            return $"Progress: {phase} · {steps}";
         }
 
         private string FormatResultStreamSummary()
@@ -2177,19 +2091,6 @@ namespace EnvForge.Navigation.Cloud
 
             safePath = fullPath;
             return true;
-        }
-
-        private string BuildResultWebSocketUrl(string resultSubmissionId)
-        {
-            if (string.IsNullOrWhiteSpace(resultSubmissionId) ||
-                string.IsNullOrWhiteSpace(webSocketUrlTemplate))
-            {
-                return string.Empty;
-            }
-
-            return webSocketUrlTemplate.Replace(
-                "{submission_id}",
-                Uri.EscapeDataString(resultSubmissionId));
         }
 
         private void DrawTrainingSettings(Rect panelRect)
@@ -2403,14 +2304,14 @@ namespace EnvForge.Navigation.Cloud
             return GetCurrentSettingsName();
         }
 
-        private IEnumerator LoadLatestReplay()
+        private async Awaitable LoadLatestReplayAsync()
         {
             EnvForgeJobRecordDto latestJob = GetActiveLocalReplayJob();
-            ArtifactLocationDto replayBundle = GetResultArtifacts()?.replay_bundle;
+            ArtifactLocation replayBundle = GetResultArtifacts()?.ReplayBundle;
             if (replayBundle == null && !string.IsNullOrWhiteSpace(submissionId))
             {
-                yield return FetchLatestResult("replay");
-                replayBundle = GetResultArtifacts()?.replay_bundle;
+                await FetchLatestResultAsync("replay");
+                replayBundle = GetResultArtifacts()?.ReplayBundle;
             }
 
             string manifestPath = latestJob?.local_replay_manifest_path;
@@ -2419,25 +2320,24 @@ namespace EnvForge.Navigation.Cloud
                 if (replayBundle == null || !IsCompletedResult())
                 {
                     status = "Replay unavailable: fetch a completed replay first";
-                    yield break;
+                    return;
                 }
 
-                yield return DownloadReplay();
+                await DownloadReplayAsync();
                 latestJob = GetActiveLocalReplayJob();
                 manifestPath = latestJob?.local_replay_manifest_path;
                 if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
                 {
                     status = "Replay download did not produce a local manifest";
-                    yield break;
+                    return;
                 }
             }
 
             bool manifestReady = false;
             try
             {
-                string manifestJson = File.ReadAllText(manifestPath);
-                ReplayBundleManifestDto manifest = ScenarioBundleSerializer.FromReplayBundleManifestJson(manifestJson);
-                ConfigureActiveReplayBundle(replayBundle, manifest, manifestPath);
+                ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(manifestPath);
+                ConfigureActiveReplayBundle(manifest, manifestPath);
                 activeReplayScenarioSource = ApplyReplayScenario(latestJob);
                 manifestReady = true;
             }
@@ -2449,16 +2349,16 @@ namespace EnvForge.Navigation.Cloud
 
             if (!manifestReady)
             {
-                yield break;
+                return;
             }
 
             if (activeReplayChunks.Count == 0)
             {
                 status = "Replay bundle has no chunks";
-                yield break;
+                return;
             }
 
-            yield return LoadReplayChunkAt(0, false, false);
+            await LoadReplayChunkAtAsync(0, false, false);
         }
 
         private EnvForgeJobRecordDto GetActiveLocalReplayJob()
@@ -2480,7 +2380,7 @@ namespace EnvForge.Navigation.Cloud
             {
                 try
                 {
-                    ScenarioBundleDto scenario = ScenarioBundleSerializer.FromScenarioBundleJson(job.scenario_bundle_json);
+                    ScenarioBundle scenario = ScenarioBundleJson.Deserialize(job.scenario_bundle_json);
                     sceneBuilder?.ApplyScenarioBundle(scenario);
                     sceneBuilder?.RecordScenarioSource($"Map: job scenario {Shorten(job.submission_id, 10)}");
                     return "saved scenario";
@@ -2496,19 +2396,20 @@ namespace EnvForge.Navigation.Cloud
             return "default scenario";
         }
 
-        private static string FormatScenarioTrainerSummary(ScenarioBundleDto scenario)
+        private static string FormatScenarioTrainerSummary(ScenarioBundle scenario)
         {
-            TrainingDto training = scenario?.training;
+            TrainingSpec training = scenario?.Training;
             if (training == null)
             {
                 return "none";
             }
 
-            string cpuSummary = training.cpu_count > 0
-                ? training.cpu_count.ToString(CultureInfo.InvariantCulture)
+            string cpuSummary = training.CpuCount.HasValue && training.CpuCount.Value > 0
+                ? training.CpuCount.Value.ToString(CultureInfo.InvariantCulture)
                 : "job";
-            return $"{training.algorithm} · {FormatSteps(training.timesteps)} · seed {training.seed} · envs {training.n_envs} · " +
-                   $"cpu {cpuSummary} · th {training.torch_num_threads} · n_steps {training.n_steps} · batch {training.batch_size}";
+            string algorithm = training.Algorithm.ToString().ToLowerInvariant();
+            return $"{algorithm} · {FormatSteps(training.Timesteps)} · seed {training.Seed} · envs {training.NEnvs} · " +
+                   $"cpu {cpuSummary} · th {training.TorchNumThreads ?? 0} · n_steps {training.NSteps} · batch {training.BatchSize}";
         }
 
         private GUIStyle GetPresetButtonStyle(string presetName)
