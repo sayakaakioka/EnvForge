@@ -62,6 +62,7 @@ namespace EnvForge.Navigation.Cloud
         private bool autoDownloadStarted;
         private bool resultFetchInFlight;
         private bool replayChunkLoadInFlight;
+        private int activeReplaySessionVersion;
         private int activeReplayChunkIndex = -1;
         private string activeReplayManifestPath;
         private string activeReplayScenarioSource;
@@ -159,9 +160,12 @@ namespace EnvForge.Navigation.Cloud
                     : resultWebSocketBaseUrl;
             try
             {
-                endpoints = new EmbodiedLabEndpoints(
+                endpoints = null;
+                EmbodiedLabEndpoints configuredEndpoints = new(
                     resolvedApiBaseUrl,
                     resolvedWebSocketBaseUrl);
+                EnvForgeEndpointSecurity.Validate(configuredEndpoints);
+                endpoints = configuredEndpoints;
             }
             catch (ArgumentException exception)
             {
@@ -170,7 +174,11 @@ namespace EnvForge.Navigation.Cloud
             }
 
             jobHistoryStore = new EnvForgeJobHistoryStore(Application.persistentDataPath);
-            RestoreLatestJob();
+            if (endpoints != null)
+            {
+                RestoreLatestJob();
+            }
+
             SyncTextFromTrainingSettings();
             if (activeJob != null)
             {
@@ -220,11 +228,6 @@ namespace EnvForge.Navigation.Cloud
                     endpoints,
                     submissionId,
                     recentJob.cancel_token));
-            }
-
-            if (!string.IsNullOrWhiteSpace(recentJob.local_replay_manifest_path))
-            {
-                loadedReplaySummary = $"Saved replay bundle: {Shorten(recentJob.submission_id, 18)}";
             }
 
             status = $"Cloud: restored {Shorten(recentJob.submission_id, 18)}";
@@ -371,17 +374,18 @@ namespace EnvForge.Navigation.Cloud
             Rect downloadRect = new(submitRect.xMax + ButtonGap, top, buttonWidth, height);
             Rect aiRect = new(downloadRect.xMax + ButtonGap, top, buttonWidth, height);
 
-            if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), buttonStyle, !busy))
+            bool cloudActionEnabled = !busy && !resultFetchInFlight;
+            if (DrawButton(replayRect, new GUIContent("Replay", "Load replay"), buttonStyle, cloudActionEnabled))
             {
                 _ = LoadLatestReplayAsync();
             }
 
-            if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, !busy && endpoints != null && sceneBuilder != null))
+            if (DrawButton(submitRect, new GUIContent("Submit", "Submit and train"), buttonStyle, cloudActionEnabled && endpoints != null && sceneBuilder != null))
             {
                 _ = SubmitAndTrainAsync();
             }
 
-            if (DrawButton(downloadRect, new GUIContent("Download", "Download artifacts"), buttonStyle, !busy))
+            if (DrawButton(downloadRect, new GUIContent("Download", "Download artifacts"), buttonStyle, cloudActionEnabled))
             {
                 _ = DownloadAvailableArtifactsAsync();
             }
@@ -533,6 +537,11 @@ namespace EnvForge.Navigation.Cloud
 
         private void SetActiveJob(EmbodiedLabJob job)
         {
+            if (!string.Equals(submissionId, job?.SubmissionId, StringComparison.Ordinal))
+            {
+                ResetActiveReplaySession();
+            }
+
             if (activeJob != null)
             {
                 activeJob.ResultUpdated -= OnActiveJobResultUpdated;
@@ -558,23 +567,31 @@ namespace EnvForge.Navigation.Cloud
             ResetResultPresentation();
             status = "Cloud: submitting scenario";
 
-            ScenarioBundle scenario = sceneBuilder.BuildScenarioBundle();
-            activeScenarioId = scenario.ScenarioId;
-            string trainerSummary = FormatScenarioTrainerSummary(scenario);
             try
             {
+                ScenarioBundle scenario = sceneBuilder.BuildScenarioBundle();
+                activeScenarioId = scenario.ScenarioId;
+                string trainerSummary = FormatScenarioTrainerSummary(scenario);
                 EmbodiedLabJob job = await EmbodiedLabJob.SubmitAsync(
                     endpoints,
                     scenario,
                     lifetimeCancellation.Token);
                 SetActiveJob(job);
-                jobHistoryStore.UpsertSubmittedJob(
-                    job.SubmissionId,
-                    job.CancelToken,
-                    scenario,
-                    trainerSummary,
-                    GetCurrentSettingsName());
-                status = $"Cloud: submitted {Shorten(job.SubmissionId, 18)}";
+                try
+                {
+                    jobHistoryStore.UpsertSubmittedJob(
+                        job.SubmissionId,
+                        job.CancelToken,
+                        scenario,
+                        trainerSummary,
+                        GetCurrentSettingsName());
+                    status = $"Cloud: submitted {Shorten(job.SubmissionId, 18)}";
+                }
+                catch (Exception exception)
+                {
+                    status = $"Cloud: submitted {Shorten(job.SubmissionId, 18)}; history save failed";
+                    Debug.LogWarning($"Submitted job history save failed for {job.SubmissionId}: {exception.Message}");
+                }
             }
             catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
             {
@@ -731,7 +748,15 @@ namespace EnvForge.Navigation.Cloud
             lastResultStreamReceivedAt = DateTime.Now.ToString(
                 "HH:mm:ss",
                 CultureInfo.InvariantCulture);
-            jobHistoryStore.UpsertResult(resultSubmissionId, result);
+            try
+            {
+                jobHistoryStore.UpsertResult(resultSubmissionId, result);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Job history update failed for {resultSubmissionId}: {exception.Message}");
+            }
+
             status = $"Cloud: {resultStatus}";
 
             if (IsTerminalResultStatus(result.Status))
@@ -849,7 +874,6 @@ namespace EnvForge.Navigation.Cloud
                 ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(manifestPath);
                 ConfigureActiveReplayBundle(manifest, manifestPath);
                 jobHistoryStore.SetLocalReplayManifestPath(submissionId, manifestPath);
-                loadedReplaySummary = $"Replay manifest ready: {manifest.Chunks?.Count ?? 0} chunks";
                 status = "Cloud: replay manifest ready";
             }
             catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
@@ -942,7 +966,7 @@ namespace EnvForge.Navigation.Cloud
 
         private ResultArtifacts GetResultArtifacts()
         {
-            return latestResult?.ResultBundle?.Artifacts;
+            return EnvForgeResultArtifacts.Resolve(latestResult);
         }
 
         private bool IsCompletedResult()
@@ -1057,7 +1081,8 @@ namespace EnvForge.Navigation.Cloud
         private async Awaitable LoadReplayChunkAtAsync(
             int chunkIndex,
             bool autoPlay,
-            bool startAtEnd)
+            bool startAtEnd,
+            bool startAtLastEpisode = false)
         {
             if (replayChunkLoadInFlight)
             {
@@ -1072,62 +1097,85 @@ namespace EnvForge.Navigation.Cloud
 
             replayChunkLoadInFlight = true;
             busy = true;
+            int replaySessionVersion = activeReplaySessionVersion;
+            string replaySubmissionId = submissionId;
             try
             {
-                ReplayBundleChunk chunk = activeReplayChunks[chunkIndex];
-                string localChunkPath = GetLocalReplayChunkPath(chunk);
-                if (string.IsNullOrEmpty(localChunkPath))
+                int searchDirection = startAtEnd ? -1 : 1;
+                int candidateChunkIndex = chunkIndex;
+                while (candidateChunkIndex >= 0 && candidateChunkIndex < activeReplayChunks.Count)
                 {
-                    status = "Replay output path is unavailable";
+                    ReplayBundleChunk chunk = activeReplayChunks[candidateChunkIndex];
+                    string localChunkPath = GetLocalReplayChunkPath(chunk);
+                    if (string.IsNullOrEmpty(localChunkPath))
+                    {
+                        status = "Replay output path is unavailable";
+                        return;
+                    }
+
+                    if (!File.Exists(localChunkPath))
+                    {
+                        EmbodiedLabJob job = activeJob;
+                        if (job == null)
+                        {
+                            status = "Replay job handle is unavailable";
+                            return;
+                        }
+
+                        status = $"Cloud: downloading replay {FormatReplayChunkLabel(chunk)}";
+                        await job.DownloadReplayChunkAsync(
+                            chunk,
+                            localChunkPath,
+                            lifetimeCancellation.Token);
+                        if (!ReferenceEquals(job, activeJob) || replaySessionVersion != activeReplaySessionVersion)
+                        {
+                            return;
+                        }
+                    }
+
+                    if (replaySessionVersion != activeReplaySessionVersion ||
+                        !string.Equals(replaySubmissionId, submissionId, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    IReadOnlyList<ReplayLogStep> chunkSteps =
+                        EmbodiedLabReplay.ReadSteps(localChunkPath);
+                    List<ReplayLogStep> displaySteps = EnvForgeReplayDisplayBuilder.BuildDisplaySteps(
+                        chunkSteps,
+                        ReplayDisplayEnvIndex);
+                    if (displaySteps.Count == 0)
+                    {
+                        candidateChunkIndex += searchDirection;
+                        continue;
+                    }
+
+                    EnvForgeJobRecordDto record = jobHistoryStore.SetLocalReplayBundlePaths(
+                        replaySubmissionId,
+                        activeReplayManifestPath,
+                        localChunkPath);
+                    activeReplayScenarioSource = ApplyReplayScenario(record);
+                    replayPlayer.LoadWindow(
+                        displaySteps,
+                        candidateChunkIndex,
+                        activeReplayChunks.Count,
+                        $"{FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
+                        autoPlay,
+                        startAtEnd,
+                        startAtLastEpisode);
+                    activeReplayChunkIndex = candidateChunkIndex;
+                    loadedReplaySummary = EnvForgeReplayDisplayBuilder.FormatSummary(
+                        displaySteps,
+                        $"Replay {FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
+                        activeReplayScenarioSource,
+                        Shorten);
+                    status = $"Cloud: replay {FormatReplayChunkLabel(chunk)} loaded";
                     return;
                 }
 
-                if (!File.Exists(localChunkPath))
-                {
-                    EmbodiedLabJob job = activeJob;
-                    if (job == null)
-                    {
-                        status = "Replay job handle is unavailable";
-                        return;
-                    }
-
-                    status = $"Cloud: downloading replay {FormatReplayChunkLabel(chunk)}";
-                    await job.DownloadReplayChunkAsync(
-                        chunk,
-                        localChunkPath,
-                        lifetimeCancellation.Token);
-                    if (!ReferenceEquals(job, activeJob))
-                    {
-                        return;
-                    }
-                }
-
-                IReadOnlyList<ReplayLogStep> chunkSteps =
-                    EmbodiedLabReplay.ReadSteps(localChunkPath);
-                List<ReplayLogStep> displaySteps = EnvForgeReplayDisplayBuilder.BuildDisplaySteps(
-                    chunkSteps,
-                    ReplayDisplayEnvIndex);
-                EnvForgeJobRecordDto record = jobHistoryStore.SetLocalReplayBundlePaths(
-                    submissionId,
-                    activeReplayManifestPath,
-                    localChunkPath);
-                activeReplayScenarioSource = ApplyReplayScenario(record);
-                replayPlayer.LoadWindow(
-                    displaySteps,
-                    chunkIndex,
-                    activeReplayChunks.Count,
-                    0,
-                    displaySteps.Count,
-                    $"{FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
-                    autoPlay,
-                    startAtEnd);
-                activeReplayChunkIndex = chunkIndex;
-                loadedReplaySummary = EnvForgeReplayDisplayBuilder.FormatSummary(
-                    displaySteps,
-                    $"Replay {FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
-                    activeReplayScenarioSource,
-                    Shorten);
-                status = $"Cloud: replay {FormatReplayChunkLabel(chunk)} loaded";
+                replayPlayer.Clear();
+                loadedReplaySummary = null;
+                status = $"Replay has no steps for env {ReplayDisplayEnvIndex}";
             }
             catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
             {
@@ -1135,19 +1183,25 @@ namespace EnvForge.Navigation.Cloud
             }
             catch (Exception exception)
             {
-                status = $"Replay chunk load failed: {FormatUserFacingError(exception.Message)}";
-                Debug.LogError($"Replay chunk load failed: {exception}");
+                if (replaySessionVersion == activeReplaySessionVersion)
+                {
+                    status = $"Replay chunk load failed: {FormatUserFacingError(exception.Message)}";
+                    Debug.LogError($"Replay chunk load failed: {exception}");
+                }
             }
             finally
             {
-                FinishReplayChunkLoad();
+                FinishReplayChunkLoad(replaySessionVersion);
             }
         }
 
-        private void FinishReplayChunkLoad()
+        private void FinishReplayChunkLoad(int replaySessionVersion)
         {
             replayChunkLoadInFlight = false;
-            busy = false;
+            if (replaySessionVersion == activeReplaySessionVersion)
+            {
+                busy = false;
+            }
         }
 
         private string GetLocalReplayChunkPath(ReplayBundleChunk chunk)
@@ -1166,7 +1220,10 @@ namespace EnvForge.Navigation.Cloud
                     : string.Empty;
         }
 
-        private void HandleReplayWindowBoundaryRequested(int direction, bool autoPlay)
+        private void HandleReplayWindowBoundaryRequested(
+            int direction,
+            bool autoPlay,
+            bool startAtLastEpisode)
         {
             if (replayChunkLoadInFlight || activeReplayChunks.Count == 0)
             {
@@ -1186,7 +1243,11 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            _ = LoadReplayChunkAtAsync(nextIndex, autoPlay, direction < 0);
+            _ = LoadReplayChunkAtAsync(
+                nextIndex,
+                autoPlay,
+                direction < 0,
+                startAtLastEpisode);
         }
 
         private static string FormatReplayChunkLabel(ReplayBundleChunk chunk)
@@ -1292,28 +1353,33 @@ namespace EnvForge.Navigation.Cloud
                     bool selected = string.Equals(job.submission_id, submissionId, StringComparison.OrdinalIgnoreCase);
                     GUILayout.Label(FormatLibraryJobSummary(job, selected), detailStyle);
                     GUILayout.BeginHorizontal();
+                    bool previousEnabled = GUI.enabled;
+                    bool actionsEnabled = previousEnabled &&
+                        !libraryRefreshInFlight &&
+                        !busy &&
+                        !resultFetchInFlight;
+                    GUI.enabled = actionsEnabled;
                     if (GUILayout.Button("Select", selected ? selectedButtonStyle : buttonStyle, GUILayout.Height(ButtonHeight)))
                     {
                         SelectLibraryJob(job, reconnect: false);
                     }
 
                     bool hasReplay = !string.IsNullOrWhiteSpace(job.local_replay_manifest_path) && File.Exists(job.local_replay_manifest_path);
-                    bool previousEnabled = GUI.enabled;
-                    GUI.enabled = previousEnabled && hasReplay;
+                    GUI.enabled = actionsEnabled && hasReplay;
                     if (GUILayout.Button("Replay", buttonStyle, GUILayout.Height(ButtonHeight)))
                     {
                         SelectLibraryJob(job, reconnect: false);
                         _ = LoadLatestReplayAsync();
                     }
 
-                    GUI.enabled = previousEnabled && !string.IsNullOrWhiteSpace(job.submission_id);
+                    GUI.enabled = actionsEnabled && !string.IsNullOrWhiteSpace(job.submission_id);
                     if (GUILayout.Button("Fetch", buttonStyle, GUILayout.Height(ButtonHeight)))
                     {
                         SelectLibraryJob(job, reconnect: false);
                         _ = FetchLatestResultAsync("library");
                     }
 
-                    GUI.enabled = previousEnabled && !string.IsNullOrWhiteSpace(job.submission_id);
+                    GUI.enabled = actionsEnabled && !string.IsNullOrWhiteSpace(job.submission_id);
                     string deleteLabel = string.Equals(pendingDeleteSubmissionId, job.submission_id, StringComparison.Ordinal)
                         ? "Confirm"
                         : "Remove";
@@ -1452,9 +1518,9 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            DeleteLocalArtifactIfPresent(job.local_replay_manifest_path);
-            DeleteLocalArtifactIfPresent(job.local_replay_chunk_path);
-            DeleteLocalArtifactIfPresent(job.local_onnx_path);
+            DeleteLocalArtifactIfPresent(job.local_replay_manifest_path, job.submission_id);
+            DeleteLocalArtifactIfPresent(job.local_replay_chunk_path, job.submission_id);
+            DeleteLocalArtifactIfPresent(job.local_onnx_path, job.submission_id);
             if (jobHistoryStore.RemoveJob(job.submission_id))
             {
                 RestoreActiveJobAfterHistoryMutation();
@@ -1464,9 +1530,11 @@ namespace EnvForge.Navigation.Cloud
             pendingDeleteSubmissionId = null;
         }
 
-        private static void DeleteLocalArtifactIfPresent(string path)
+        private static void DeleteLocalArtifactIfPresent(string path, string submissionId)
         {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) || !IsSafeLocalArtifactPath(path))
+            if (string.IsNullOrWhiteSpace(path) ||
+                !File.Exists(path) ||
+                !IsSafeLocalArtifactPath(path, submissionId))
             {
                 return;
             }
@@ -1485,22 +1553,36 @@ namespace EnvForge.Navigation.Cloud
             }
         }
 
-        private static bool IsSafeLocalArtifactPath(string path)
+        private static bool IsSafeLocalArtifactPath(string path, string submissionId)
         {
             try
             {
-                string root = Path.GetFullPath(Application.persistentDataPath)
+                string root = Path.GetFullPath(Path.Combine(
+                        Application.persistentDataPath,
+                        "EnvForge",
+                        GetSafeSubmissionDirectoryName(submissionId)))
                     .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 string fullPath = Path.GetFullPath(path);
-                return fullPath.Equals(root, StringComparison.OrdinalIgnoreCase) ||
-                    fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                    fullPath.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                string rootPrefix = root + Path.DirectorySeparatorChar;
+                if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                string relativePath = fullPath.Substring(rootPrefix.Length);
+                return string.Equals(relativePath, "policy.onnx", StringComparison.OrdinalIgnoreCase) ||
+                    relativePath.StartsWith("replay" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                    relativePath.StartsWith("replay" + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
             }
             catch (ArgumentException)
             {
                 return false;
             }
             catch (NotSupportedException)
+            {
+                return false;
+            }
+            catch (IOException)
             {
                 return false;
             }
@@ -1525,9 +1607,6 @@ namespace EnvForge.Navigation.Cloud
                 selectedJob.submission_id,
                 selectedJob.cancel_token));
             activeScenarioId = selectedJob.scenario_id;
-            loadedReplaySummary = !string.IsNullOrWhiteSpace(selectedJob.local_replay_manifest_path)
-                ? $"manifest saved for {Shorten(selectedJob.submission_id, 18)}"
-                : null;
             latestResult = null;
             ResetResultPresentation();
             pendingDeleteSubmissionId = null;
@@ -1554,36 +1633,53 @@ namespace EnvForge.Navigation.Cloud
 
             libraryRefreshInFlight = true;
             status = "Library: refreshing history";
-            List<EnvForgeJobRecordDto> jobs = new(jobHistoryStore.Jobs);
-            foreach (EnvForgeJobRecordDto job in jobs)
+            try
             {
-                if (job == null || string.IsNullOrWhiteSpace(job.submission_id))
+                List<EnvForgeJobRecordDto> jobs = new(jobHistoryStore.Jobs);
+                int failureCount = 0;
+                foreach (EnvForgeJobRecordDto job in jobs)
                 {
-                    continue;
+                    if (job == null || string.IsNullOrWhiteSpace(job.submission_id))
+                    {
+                        continue;
+                    }
+
+                    if (!await RefreshLibraryJobResultAsync(job))
+                    {
+                        failureCount += 1;
+                    }
                 }
 
-                await RefreshLibraryJobResultAsync(job);
+                status = failureCount == 0
+                    ? "Library: history refreshed"
+                    : $"Library: refresh completed with {failureCount} failed";
             }
-
-            libraryRefreshInFlight = false;
-            status = "Library: history refreshed";
+            finally
+            {
+                libraryRefreshInFlight = false;
+            }
         }
 
-        private async Awaitable RefreshLibraryJobResultAsync(EnvForgeJobRecordDto record)
+        private async Awaitable<bool> RefreshLibraryJobResultAsync(EnvForgeJobRecordDto record)
         {
             string requestedSubmissionId = record?.submission_id;
             if (string.IsNullOrWhiteSpace(requestedSubmissionId))
             {
-                return;
+                return false;
             }
 
-            using EmbodiedLabJob job = EmbodiedLabJob.Restore(
-                endpoints,
-                requestedSubmissionId,
-                record.cancel_token);
             try
             {
+                using EmbodiedLabJob job = EmbodiedLabJob.Restore(
+                    endpoints,
+                    requestedSubmissionId,
+                    record.cancel_token);
                 ResultDocument fetchedResult = await job.RefreshAsync(lifetimeCancellation.Token);
+                if (jobHistoryStore.FindJob(requestedSubmissionId) == null)
+                {
+                    return true;
+                }
+
                 if (string.Equals(requestedSubmissionId, submissionId, StringComparison.Ordinal))
                 {
                     ApplyResultUpdate(fetchedResult, requestedSubmissionId, countStreamEvent: false);
@@ -1592,14 +1688,17 @@ namespace EnvForge.Navigation.Cloud
                 {
                     jobHistoryStore.UpsertResult(requestedSubmissionId, fetchedResult);
                 }
+
+                return true;
             }
             catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested)
             {
-                return;
+                return false;
             }
             catch (Exception exception)
             {
                 Debug.LogWarning($"Library refresh failed for {Shorten(requestedSubmissionId, 18)}: {exception.Message}");
+                return false;
             }
         }
 
@@ -2038,6 +2137,17 @@ namespace EnvForge.Navigation.Cloud
             return $"{safePrefix}-{ShortHash(value)}";
         }
 
+        private void ResetActiveReplaySession()
+        {
+            activeReplaySessionVersion += 1;
+            activeReplayChunkIndex = -1;
+            activeReplayManifestPath = null;
+            activeReplayScenarioSource = null;
+            activeReplayChunks.Clear();
+            loadedReplaySummary = null;
+            replayPlayer?.Clear();
+        }
+
         private static string ShortHash(string value)
         {
             using SHA256 sha256 = SHA256.Create();
@@ -2306,11 +2416,23 @@ namespace EnvForge.Navigation.Cloud
 
         private async Awaitable LoadLatestReplayAsync()
         {
+            if (resultFetchInFlight)
+            {
+                return;
+            }
+
+            int replaySessionVersion = activeReplaySessionVersion;
+            string replaySubmissionId = submissionId;
             EnvForgeJobRecordDto latestJob = GetActiveLocalReplayJob();
             ArtifactLocation replayBundle = GetResultArtifacts()?.ReplayBundle;
             if (replayBundle == null && !string.IsNullOrWhiteSpace(submissionId))
             {
                 await FetchLatestResultAsync("replay");
+                if (!IsCurrentReplaySession(replaySessionVersion, replaySubmissionId))
+                {
+                    return;
+                }
+
                 replayBundle = GetResultArtifacts()?.ReplayBundle;
             }
 
@@ -2324,6 +2446,11 @@ namespace EnvForge.Navigation.Cloud
                 }
 
                 await DownloadReplayAsync();
+                if (!IsCurrentReplaySession(replaySessionVersion, replaySubmissionId))
+                {
+                    return;
+                }
+
                 latestJob = GetActiveLocalReplayJob();
                 manifestPath = latestJob?.local_replay_manifest_path;
                 if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
@@ -2336,6 +2463,11 @@ namespace EnvForge.Navigation.Cloud
             bool manifestReady = false;
             try
             {
+                if (!IsCurrentReplaySession(replaySessionVersion, replaySubmissionId))
+                {
+                    return;
+                }
+
                 ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(manifestPath);
                 ConfigureActiveReplayBundle(manifest, manifestPath);
                 activeReplayScenarioSource = ApplyReplayScenario(latestJob);
@@ -2359,6 +2491,12 @@ namespace EnvForge.Navigation.Cloud
             }
 
             await LoadReplayChunkAtAsync(0, false, false);
+        }
+
+        private bool IsCurrentReplaySession(int replaySessionVersion, string replaySubmissionId)
+        {
+            return replaySessionVersion == activeReplaySessionVersion &&
+                string.Equals(replaySubmissionId, submissionId, StringComparison.Ordinal);
         }
 
         private EnvForgeJobRecordDto GetActiveLocalReplayJob()

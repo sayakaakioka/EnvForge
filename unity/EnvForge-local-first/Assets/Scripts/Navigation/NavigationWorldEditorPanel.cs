@@ -7,6 +7,7 @@ using EmbodiedLab.Contracts;
 using EmbodiedLab.Unity;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Replay;
+using Newtonsoft.Json;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -930,6 +931,11 @@ namespace EnvForge.Navigation
                 mapStatus = $"Map: loaded {displayName}";
             }
             catch (IOException exception)
+            {
+                mapStatus = "Map: load failed";
+                Debug.LogError($"Map load failed: {exception.Message}");
+            }
+            catch (JsonException exception)
             {
                 mapStatus = "Map: load failed";
                 Debug.LogError($"Map load failed: {exception.Message}");

@@ -3,8 +3,9 @@
 ## 状態
 
 `EmbodiedLab.Unity` の導入と EnvForge の呼び出し元移行は実装済みである。
-Unity Editor を使う package resolve、compile、Play mode の最終確認は、Unity
-6000.3.11f1 を利用できる環境で行う。
+Unity 6000.3.11f1 で package resolve と batchmode compile を確認済みである。
+submit、monitor、cancel、download、replay、履歴復元の実サービスを使う Play mode
+確認は手動統合確認として残る。
 
 ## 目的
 
@@ -60,6 +61,14 @@ Replay Bundle の取得と parse は SDK に移すが、robot、wall、goal を 
    再起動後の監視、取得、キャンセルを可能にした。
 6. Replay manifest、選択した chunk、学習済みモデルの取得と parse を SDK へ移した。
 7. EnvForge 内の旧 DTO、HTTP client、WebSocket client、downloader、serializer を削除した。
+8. review 後の hardening として、Replay の入力順保持、job 切替時の Replay 状態破棄、
+   chunk 間の前後移動と chunk-local log step 表示、history refresh と削除の競合防止、
+   terminal job の cancellation token 破棄を追加した。
+9. EnvForge の接続設定では非 loopback の平文 HTTP / WebSocket と userinfo 付き URL を
+   UI と command-line automation の両方で拒否し、履歴から削除できるローカル artifact を
+   対象 job の replay と model に限定した。
+10. Result Document の artifact metadata は `result_bundle.artifacts` と旧 top-level
+    `artifacts` のどちらからでも同じ補助処理で解決する。
 
 ## 学習環境モードとの関係
 
@@ -75,10 +84,15 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
 
 - UPM package は merge commit を指定した Git URL で固定している。
 - SDK 側では contract、transport、facade、scenario/replay API の test と lint が成功した。
+- Unity 6000.3.11f1 の batchmode で package resolve と `Assembly-CSharp`、
+  `Assembly-CSharp-Editor` の compile が成功した。
+- SDK package の Unity Test Runner は 8 件成功した。EnvForge 利用側の EditMode runner は
+  対象 test が 0 件であり、利用側固有の job 切替、履歴競合、Replay 順序の自動 test は
+  引き続き不足している。
 - EnvForge の replay fixture は生成済み契約の必須項目を満たす。
 - 旧実装への参照が残っていないことと JSON / Markdown / C# syntax を静的確認する。
-- Unity package resolve、compile、Play mode での submit、monitor、cancel、download、
-  replay、履歴復元は Unity 6000.3.11f1 環境で最終確認する。
+- Play mode での submit、monitor、cancel、download、replay、履歴復元は、実サービスへ
+  接続できる環境で最終確認する。
 
 ## スコープ外・保留事項
 
@@ -86,4 +100,14 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
   EnvForge 側に保留する。
 - 認証、private artifact、signed URL は今回実装しない。具体的な backend contract と
   利用要件が決まった時点で設計し、将来用途だけの拡張点は先に追加しない。
+- SDK 全体での WebSocket message、artifact download、gzip 展開後サイズの上限は未実装で
+  ある。EnvForge 側だけでは他の SDK 利用者を保護できないため、SDK 側の別 PR で扱う。
+- SDK の endpoint 自体が非 loopback の平文 HTTP / WebSocket を拒否する変更は、既存利用者
+  への影響を確認して SDK 側の別 PR で扱う。EnvForge 利用時は今回追加した設定検証で拒否する。
+- running job の cancellation capability token は再起動後の cancel に必要な間だけ
+  `job-history.json` に平文保存し、terminal result 受信時に破棄する。現在は単一ユーザ端末と
+  OS アカウント境界を前提とする。共有端末を対象にする場合は OS protected storage を設計する。
+- Result artifact の正規化済み値を SDK から公開する API は未実装である。現在は EnvForge の
+  表示と履歴保存で nested / top-level の差を吸収する最小 adapter を置いているが、SDK 側に
+  最小公開 API を追加する際は adapter を削除し、artifact 解釈を SDK に一本化する。
 - `fixed` / `generated` の選択と宣言的な生成規則は、この移行とは別の設計・実装にする。

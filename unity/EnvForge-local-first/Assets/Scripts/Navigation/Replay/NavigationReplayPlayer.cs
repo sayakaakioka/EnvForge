@@ -47,8 +47,6 @@ namespace EnvForge.Navigation.Replay
         private Texture2D nextIcon;
         private float replayClock;
         private int currentStepIndex;
-        private int windowStartStepIndex;
-        private int windowTotalStepCount;
         private int windowIndex;
         private int windowCount = 1;
         private string windowLabel = "Replay";
@@ -56,7 +54,7 @@ namespace EnvForge.Navigation.Replay
         private bool showDetails;
         private string status = "Replay: no log loaded";
 
-        public event Action<int, bool> WindowBoundaryRequested;
+        public event Action<int, bool, bool> WindowBoundaryRequested;
         public event Action ReplayControlRequested;
 
         public bool HasReplay => steps.Count > 0;
@@ -93,18 +91,17 @@ namespace EnvForge.Navigation.Replay
 
         public void LoadSteps(IReadOnlyList<ReplayLogStep> replaySteps)
         {
-            LoadWindow(replaySteps, 0, 1, 0, replaySteps?.Count ?? 0, "Replay", false);
+            LoadWindow(replaySteps, 0, 1, "Replay", false);
         }
 
         public void LoadWindow(
             IReadOnlyList<ReplayLogStep> replaySteps,
             int replayWindowIndex,
             int replayWindowCount,
-            int globalStartStepIndex,
-            int globalTotalStepCount,
             string label,
             bool autoPlay,
-            bool startAtEnd = false)
+            bool startAtEnd = false,
+            bool startAtLastEpisode = false)
         {
             steps.Clear();
             if (replaySteps != null)
@@ -114,9 +111,11 @@ namespace EnvForge.Navigation.Replay
 
             RebuildEpisodeIndex();
             currentStepIndex = startAtEnd && steps.Count > 0 ? steps.Count - 1 : 0;
+            if (startAtLastEpisode && episodeStartIndices.Count > 0)
+            {
+                currentStepIndex = episodeStartIndices[episodeStartIndices.Count - 1];
+            }
             replayClock = steps.Count > 0 ? (float)steps[currentStepIndex].TimeSeconds : 0f;
-            windowStartStepIndex = Mathf.Max(0, globalStartStepIndex);
-            windowTotalStepCount = Mathf.Max(steps.Count, globalTotalStepCount);
             windowIndex = Mathf.Max(0, replayWindowIndex);
             windowCount = Mathf.Max(1, replayWindowCount);
             windowLabel = string.IsNullOrWhiteSpace(label) ? "Replay" : label;
@@ -144,7 +143,7 @@ namespace EnvForge.Navigation.Replay
                 {
                     isPlaying = false;
                     status = "Replay: loading next";
-                    WindowBoundaryRequested?.Invoke(1, true);
+                    WindowBoundaryRequested?.Invoke(1, true, false);
                     return;
                 }
 
@@ -174,6 +173,20 @@ namespace EnvForge.Navigation.Replay
             DisableLiveControl();
             ApplyCurrentStep();
             status = HasReplay ? "Replay: stopped" : "Replay: no log loaded";
+        }
+
+        public void Clear()
+        {
+            isPlaying = false;
+            steps.Clear();
+            episodeStartIndices.Clear();
+            currentStepIndex = 0;
+            replayClock = 0f;
+            windowIndex = 0;
+            windowCount = 1;
+            windowLabel = "Replay";
+            showDetails = false;
+            ReleaseControl();
         }
 
         public void ReleaseControl()
@@ -206,7 +219,7 @@ namespace EnvForge.Navigation.Replay
             if (currentStepIndex >= steps.Count - 1)
             {
                 status = "Replay: loading next";
-                WindowBoundaryRequested?.Invoke(1, false);
+                WindowBoundaryRequested?.Invoke(1, false, false);
                 return;
             }
 
@@ -230,7 +243,7 @@ namespace EnvForge.Navigation.Replay
             if (episodeIndex >= episodeStartIndices.Count - 1)
             {
                 status = "Replay: loading next";
-                WindowBoundaryRequested?.Invoke(1, false);
+                WindowBoundaryRequested?.Invoke(1, false, false);
                 return;
             }
 
@@ -255,7 +268,7 @@ namespace EnvForge.Navigation.Replay
             if (episodeIndex <= 0)
             {
                 status = "Replay: loading previous";
-                WindowBoundaryRequested?.Invoke(-1, true);
+                WindowBoundaryRequested?.Invoke(-1, false, true);
                 return;
             }
 
@@ -279,7 +292,7 @@ namespace EnvForge.Navigation.Replay
             if (currentStepIndex <= 0)
             {
                 status = "Replay: loading previous";
-                WindowBoundaryRequested?.Invoke(-1, true);
+                WindowBoundaryRequested?.Invoke(-1, false, false);
                 return;
             }
 
@@ -319,7 +332,7 @@ namespace EnvForge.Navigation.Replay
                 currentStepIndex = steps.Count - 1;
                 isPlaying = false;
                 status = "Replay: loading next";
-                WindowBoundaryRequested?.Invoke(1, true);
+                WindowBoundaryRequested?.Invoke(1, true, false);
                 return;
             }
 
@@ -760,8 +773,7 @@ namespace EnvForge.Navigation.Replay
         {
             int episodeIndex = GetCurrentEpisodeIndex() + 1;
             int episodeCount = Mathf.Max(1, episodeStartIndices.Count);
-            int globalStep = windowStartStepIndex + currentStepIndex + 1;
-            return $"chunk {windowIndex + 1}/{windowCount} ep {episodeIndex}/{episodeCount} {NormalizeEpisodeId(step)} step {GetCurrentEpisodeStepNumber()}/{GetCurrentEpisodeStepCount()} total {globalStep}/{windowTotalStepCount}";
+            return $"chunk {windowIndex + 1}/{windowCount} ep {episodeIndex}/{episodeCount} {NormalizeEpisodeId(step)} step {GetCurrentEpisodeStepNumber()}/{GetCurrentEpisodeStepCount()} log {currentStepIndex + 1}/{steps.Count}";
         }
 
         private string FormatCompactEpisodeStatus()

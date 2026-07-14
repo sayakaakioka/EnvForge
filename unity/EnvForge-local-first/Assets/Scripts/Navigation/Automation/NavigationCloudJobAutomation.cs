@@ -66,7 +66,6 @@ namespace EnvForge.Navigation.Automation
             CloudJobSubmissionResult result = new()
             {
                 status = "failed",
-                api_base_url = apiBaseUrl,
                 scenario_id = scenarioId,
                 training_preset = trainingPreset,
                 world_variant = worldVariant,
@@ -97,8 +96,6 @@ namespace EnvForge.Navigation.Automation
             string resolvedWebSocketBaseUrl = string.IsNullOrWhiteSpace(webSocketBaseUrl)
                 ? DefaultWebSocketBaseUrl
                 : webSocketBaseUrl;
-            result.api_base_url = resolvedApiBaseUrl;
-            result.websocket_base_url = resolvedWebSocketBaseUrl;
             _ = SubmitJobAsync(
                 scenario,
                 result,
@@ -117,6 +114,9 @@ namespace EnvForge.Navigation.Automation
                 EmbodiedLabEndpoints endpoints = new(
                     resolvedApiBaseUrl,
                     resolvedWebSocketBaseUrl);
+                EnvForgeEndpointSecurity.Validate(endpoints);
+                result.api_base_url = endpoints.ApiBaseUri.AbsoluteUri;
+                result.websocket_base_url = endpoints.ResultWebSocketBaseUri.AbsoluteUri;
                 using EmbodiedLabJob job = await EmbodiedLabJob.SubmitAsync(
                     endpoints,
                     scenario);

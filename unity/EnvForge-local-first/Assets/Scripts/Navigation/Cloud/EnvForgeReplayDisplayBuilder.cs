@@ -25,7 +25,6 @@ namespace EnvForge.Navigation.Cloud
                 }
             }
 
-            displaySteps.Sort(CompareDisplaySteps);
             return displaySteps;
         }
 
@@ -47,26 +46,6 @@ namespace EnvForge.Navigation.Cloud
             string scenario = string.IsNullOrWhiteSpace(scenarioSource) ? string.Empty : $" · {scenarioSource}";
             return $"{source}: job {shorten(first.JobId, 18)} · scenario {first.ScenarioId ?? "unknown"} · " +
                    $"{episodeCount} ep · first {episode} · {steps.Count} steps · {last.TimeSeconds:0.0}s{scenario}";
-        }
-
-        private static int CompareDisplaySteps(ReplayLogStep left, ReplayLogStep right)
-        {
-            int episodeComparison = string.Compare(
-                left?.EpisodeId ?? string.Empty,
-                right?.EpisodeId ?? string.Empty,
-                StringComparison.Ordinal);
-            if (episodeComparison != 0)
-            {
-                return episodeComparison;
-            }
-
-            int stepComparison = (left?.StepIndex ?? 0).CompareTo(right?.StepIndex ?? 0);
-            if (stepComparison != 0)
-            {
-                return stepComparison;
-            }
-
-            return (left?.TimeSeconds ?? 0d).CompareTo(right?.TimeSeconds ?? 0d);
         }
 
         private static int CountEpisodeSegments(IReadOnlyList<ReplayLogStep> steps)

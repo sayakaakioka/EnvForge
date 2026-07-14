@@ -115,7 +115,12 @@ namespace EnvForge.Navigation.Cloud
                 ApplyTrainingSummary(record, resultBundle.Summary);
             }
 
-            ApplyArtifactMetadata(record, resultBundle?.Artifacts);
+            ApplyArtifactMetadata(record, EnvForgeResultArtifacts.Resolve(result));
+            if (IsTerminalStatus(result.Status))
+            {
+                record.cancel_token = null;
+            }
+
             Save();
             return record;
         }
@@ -323,6 +328,13 @@ namespace EnvForge.Navigation.Cloud
         private static string FormatStatus(ResultStatus status)
         {
             return status.ToString().ToLowerInvariant();
+        }
+
+        private static bool IsTerminalStatus(ResultStatus status)
+        {
+            return status == ResultStatus.Completed ||
+                status == ResultStatus.Failed ||
+                status == ResultStatus.Cancelled;
         }
 
         [Serializable]
