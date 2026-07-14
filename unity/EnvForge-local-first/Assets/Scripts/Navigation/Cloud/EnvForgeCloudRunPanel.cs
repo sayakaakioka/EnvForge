@@ -1153,7 +1153,7 @@ namespace EnvForge.Navigation.Cloud
                 chunkSteps.Add(ReplayLogSerializer.FromReplayLogStepJson(line));
             }
 
-            List<ReplayLogStepDto> displaySteps = BuildReplayDisplaySteps(chunkSteps);
+            List<ReplayLogStepDto> displaySteps = EnvForgeReplayDisplayBuilder.BuildDisplaySteps(chunkSteps, ReplayDisplayEnvIndex);
             EnvForgeJobRecordDto job = jobHistoryStore.SetLocalReplayBundlePaths(submissionId, activeReplayManifestPath, localChunkPath);
             activeReplayScenarioSource = ApplyReplayScenario(job);
             replayPlayer.LoadWindow(
@@ -1166,7 +1166,11 @@ namespace EnvForge.Navigation.Cloud
                 autoPlay,
                 startAtEnd);
             activeReplayChunkIndex = chunkIndex;
-            loadedReplaySummary = FormatReplaySummary(displaySteps, $"Replay {FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}", activeReplayScenarioSource);
+            loadedReplaySummary = EnvForgeReplayDisplayBuilder.FormatSummary(
+                displaySteps,
+                $"Replay {FormatReplayChunkLabel(chunk)} env {ReplayDisplayEnvIndex}",
+                activeReplayScenarioSource,
+                Shorten);
             status = $"Cloud: replay {FormatReplayChunkLabel(chunk)} loaded";
             FinishReplayChunkLoad();
         }
@@ -1324,6 +1328,7 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.Label(FormatLocalArtifactSummary(), detailStyle);
             GUILayout.Label(FormatCurrentMapSummary(), detailStyle);
             GUILayout.Label(FormatCurrentModelSummary(), detailStyle);
+            GUILayout.Label(FormatRuntimeCameraSummary(), detailStyle);
             GUILayout.Label(FormatInferenceSummary(), detailStyle);
             if (!string.IsNullOrWhiteSpace(inferenceController?.LastObservationSummary))
             {
@@ -1810,6 +1815,22 @@ namespace EnvForge.Navigation.Cloud
             return $"Model: {Shorten(GetJobDisplayName(activeJob), 28)} · {Shorten(activeJob.submission_id, 10)} · {modelState}";
         }
 
+        private string FormatRuntimeCameraSummary()
+        {
+            if (inferenceController == null)
+            {
+                return "Camera: unavailable";
+            }
+
+            NavigationTrainingSettings settings = sceneBuilder?.TrainingSettings;
+            if (settings == null)
+            {
+                return $"Camera: current {inferenceController.CameraMountHeightMeters:0.00}m";
+            }
+
+            return $"Camera: current {inferenceController.CameraMountHeightMeters:0.00}m · train range {settings.CameraMountHeightMinMeters:0.00}-{settings.CameraMountHeightMaxMeters:0.00}m";
+        }
+
         private void ToggleInferenceMode()
         {
             if (inferenceController == null)
@@ -1849,6 +1870,9 @@ namespace EnvForge.Navigation.Cloud
                 return false;
             }
 
+            float runtimeCameraHeightMeters = SelectRuntimeCameraMountHeight();
+            inferenceController.SetCameraMountHeightMeters(runtimeCameraHeightMeters);
+
             replayPlayer?.ReleaseControl();
             string error;
             bool started = hasRuntimeStartPose
@@ -1859,7 +1883,7 @@ namespace EnvForge.Navigation.Cloud
                 sceneBuilder?.RecordRuntimeStart(runtimeStartPosition, runtimeStartRotation);
                 status = sceneBuilder == null
                     ? "AI: running"
-                    : $"AI: running · {FormatCurrentModelSummary()} · {sceneBuilder.LastRuntimeStartSummary}";
+                    : $"AI: running · {FormatCurrentModelSummary()} · {sceneBuilder.LastRuntimeStartSummary} · camera {runtimeCameraHeightMeters:0.00}m";
                 return true;
             }
 
@@ -1873,6 +1897,24 @@ namespace EnvForge.Navigation.Cloud
             showJobDetails = true;
             showLibraryDetails = false;
             return false;
+        }
+
+        private float SelectRuntimeCameraMountHeight()
+        {
+            NavigationTrainingSettings settings = sceneBuilder?.TrainingSettings;
+            if (settings == null)
+            {
+                return Mathf.Max(0.001f, inferenceController.CameraMountHeightMeters);
+            }
+
+            float min = Mathf.Min(settings.CameraMountHeightMinMeters, settings.CameraMountHeightMaxMeters);
+            float max = Mathf.Max(settings.CameraMountHeightMinMeters, settings.CameraMountHeightMaxMeters);
+            if (Mathf.Approximately(min, max))
+            {
+                return Mathf.Max(0.001f, min);
+            }
+
+            return Mathf.Max(0.001f, UnityEngine.Random.Range(min, max));
         }
 
         private void HandleInferenceGoalReached()
@@ -2452,64 +2494,6 @@ namespace EnvForge.Navigation.Cloud
             sceneBuilder?.ResetToDefaultScenario();
             sceneBuilder?.RecordScenarioSource("Map: default scenario");
             return "default scenario";
-        }
-
-        private static List<ReplayLogStepDto> BuildReplayDisplaySteps(IReadOnlyList<ReplayLogStepDto> rawSteps)
-        {
-            List<ReplayLogStepDto> displaySteps = new();
-            if (rawSteps == null)
-            {
-                return displaySteps;
-            }
-
-            for (int i = 0; i < rawSteps.Count; i++)
-            {
-                ReplayLogStepDto step = rawSteps[i];
-                if (step != null && step.env_index == ReplayDisplayEnvIndex)
-                {
-                    displaySteps.Add(step);
-                }
-            }
-
-            return displaySteps;
-        }
-
-        private string FormatReplaySummary(IReadOnlyList<ReplayLogStepDto> steps, string source, string scenarioSource)
-        {
-            if (steps == null || steps.Count == 0)
-            {
-                return $"{source}: no steps";
-            }
-
-            ReplayLogStepDto first = steps[0];
-            ReplayLogStepDto last = steps[steps.Count - 1];
-            string episode = string.IsNullOrWhiteSpace(first.episode_id) ? "episode unknown" : first.episode_id;
-            int episodeCount = CountEpisodeSegments(steps);
-            string scenario = string.IsNullOrWhiteSpace(scenarioSource) ? string.Empty : $" · {scenarioSource}";
-            return $"{source}: job {Shorten(first.job_id, 18)} · scenario {first.scenario_id ?? "unknown"} · " +
-                   $"{episodeCount} ep · first {episode} · {steps.Count} steps · {last.time_seconds:0.0}s{scenario}";
-        }
-
-        private static int CountEpisodeSegments(IReadOnlyList<ReplayLogStepDto> steps)
-        {
-            if (steps == null || steps.Count == 0)
-            {
-                return 0;
-            }
-
-            int count = 0;
-            string previousEpisodeId = null;
-            for (int i = 0; i < steps.Count; i++)
-            {
-                string episodeId = string.IsNullOrWhiteSpace(steps[i]?.episode_id) ? "episode_unknown" : steps[i].episode_id;
-                if (i == 0 || episodeId != previousEpisodeId)
-                {
-                    count++;
-                    previousEpisodeId = episodeId;
-                }
-            }
-
-            return count;
         }
 
         private static string FormatScenarioTrainerSummary(ScenarioBundleDto scenario)
