@@ -67,8 +67,8 @@ Replay Bundle の取得と parse は SDK に移すが、robot、wall、goal を 
 9. EnvForge の接続設定では非 loopback の平文 HTTP / WebSocket と userinfo 付き URL を
    UI と command-line automation の両方で拒否し、履歴から削除できるローカル artifact を
    対象 job の replay と model に限定した。
-10. Result Document の artifact metadata は `result_bundle.artifacts` と旧 top-level
-    `artifacts` のどちらからでも同じ補助処理で解決する。
+10. Result Document の artifact metadata は `result_bundle.artifacts` だけを参照し、
+    旧 top-level `artifacts` 用の adapter は SDK と EnvForge の両方から削除した。
 
 ## 学習環境モードとの関係
 
@@ -82,7 +82,8 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
 
 ## 検証
 
-- UPM package は merge commit を指定した Git URL で固定している。
+- UPM package は `EmbodiedLab.Unity` の merge commit
+  `a0a180bfa93d9c886bfdccdb3bee1c23beae80da` を指定した Git URL で固定している。
 - SDK 側では contract、transport、facade、scenario/replay API の test と lint が成功した。
 - Unity 6000.3.11f1 の batchmode で package resolve と `Assembly-CSharp`、
   `Assembly-CSharp-Editor` の compile が成功した。
@@ -107,7 +108,4 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
 - running job の cancellation capability token は再起動後の cancel に必要な間だけ
   `job-history.json` に平文保存し、terminal result 受信時に破棄する。現在は単一ユーザ端末と
   OS アカウント境界を前提とする。共有端末を対象にする場合は OS protected storage を設計する。
-- Result artifact の正規化済み値を SDK から公開する API は未実装である。現在は EnvForge の
-  表示と履歴保存で nested / top-level の差を吸収する最小 adapter を置いているが、SDK 側に
-  最小公開 API を追加する際は adapter を削除し、artifact 解釈を SDK に一本化する。
 - `fixed` / `generated` の選択と宣言的な生成規則は、この移行とは別の設計・実装にする。
