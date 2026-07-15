@@ -1,13 +1,13 @@
 {
   "dependencies": {
     "com.embodiedlab.unity": {
-      "version": "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#6a80ec0eca15ccba05425faf2f139586aabea028",
+      "version": "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#a0a180bfa93d9c886bfdccdb3bee1c23beae80da",
       "depth": 0,
       "source": "git",
       "dependencies": {
         "com.unity.nuget.newtonsoft-json": "3.2.2"
       },
-      "hash": "6a80ec0eca15ccba05425faf2f139586aabea028"
+      "hash": "a0a180bfa93d9c886bfdccdb3bee1c23beae80da"
     },
     "com.unity.ai.navigation": {
       "version": "2.0.11",
