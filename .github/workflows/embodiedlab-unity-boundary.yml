@@ -1,0 +1,30 @@
+name: EmbodiedLab.Unity boundary
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/embodiedlab-unity-boundary.yml"
+      - "tests/test_embodiedlab_unity_boundary.py"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Cloud/**"
+      - "unity/EnvForge-local-first/Packages/manifest.json"
+      - "unity/EnvForge-local-first/Packages/packages-lock.json"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/embodiedlab-unity-boundary.yml"
+      - "tests/test_embodiedlab_unity_boundary.py"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Cloud/**"
+      - "unity/EnvForge-local-first/Packages/manifest.json"
+      - "unity/EnvForge-local-first/Packages/packages-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the EnvForge consumer boundary
+        run: python3 -m unittest tests/test_embodiedlab_unity_boundary.py
