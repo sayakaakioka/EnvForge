@@ -115,7 +115,7 @@ namespace EnvForge.Navigation.Cloud
                 ApplyTrainingSummary(record, resultBundle.Summary);
             }
 
-            ApplyArtifactMetadata(record, EnvForgeResultArtifacts.Resolve(result));
+            ApplyArtifactMetadata(record, result.ResultBundle?.Artifacts);
             if (IsTerminalStatus(result.Status))
             {
                 record.cancel_token = null;
