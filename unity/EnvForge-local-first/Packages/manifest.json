@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.embodiedlab.unity": "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#a0a180bfa93d9c886bfdccdb3bee1c23beae80da",
     "com.unity.ai.navigation": "2.0.11",
     "com.unity.collab-proxy": "2.11.4",
     "com.unity.ide.rider": "3.0.39",

@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using EmbodiedLab.Contracts;
+using EmbodiedLab.Unity;
 using UnityEngine;
 using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Cloud;
@@ -36,7 +38,7 @@ namespace EnvForge.Navigation
         [SerializeField] private Material goalVisualMaterial;
         [SerializeField] private EnvForgeApiSettings apiSettings;
         [SerializeField] private string apiBaseUrl = "http://localhost:8000";
-        [SerializeField] private string webSocketUrlTemplate = "";
+        [SerializeField] private string webSocketBaseUrl = "";
         [SerializeField] private bool showCloudRunPanel = true;
         [SerializeField] private NavigationTrainingSettings trainingSettings = new();
 
@@ -112,14 +114,14 @@ namespace EnvForge.Navigation
             }
         }
 
-        public ScenarioBundleDto BuildScenarioBundle(string scenarioId = DefaultScenarioId)
+        public ScenarioBundle BuildScenarioBundle(string scenarioId = DefaultScenarioId)
         {
             return NavigationScenarioBundleBuilder.Build(CreateScenarioBundleSource(scenarioId));
         }
 
         public string BuildScenarioBundleJson(string scenarioId = DefaultScenarioId, bool prettyPrint = true)
         {
-            return ScenarioBundleSerializer.ToJson(BuildScenarioBundle(scenarioId), prettyPrint);
+            return ScenarioBundleJson.Serialize(BuildScenarioBundle(scenarioId), prettyPrint);
         }
 
         public void ResetToDefaultScenario()
@@ -128,7 +130,7 @@ namespace EnvForge.Navigation
             RecordScenarioSource("Map: default scenario");
         }
 
-        public void ApplyScenarioBundle(ScenarioBundleDto scenario)
+        public void ApplyScenarioBundle(ScenarioBundle scenario)
         {
             if (scenario == null)
             {
@@ -137,21 +139,21 @@ namespace EnvForge.Navigation
             }
 
             floorSize = GetScenarioFloorSize(scenario);
-            goalReachRadius = scenario.world?.goal?.radius > 0f
-                ? scenario.world.goal.radius
+            goalReachRadius = scenario.World?.Goal?.Radius > 0
+                ? (float)scenario.World.Goal.Radius
                 : NavigationScenarioBundleDefaults.CreateSource().GoalReachRadius;
-            SetAgentCollisionRadius(scenario.robot != null && scenario.robot.radius > 0f
-                ? scenario.robot.radius
+            SetAgentCollisionRadius(scenario.Robot != null && scenario.Robot.Radius > 0
+                ? (float)scenario.Robot.Radius
                 : NavigationScenarioBundleDefaults.RobotRadiusMeters);
             ApplyWallDimensionsFromScenario(scenario);
 
             ClearUserWalls();
             ApplyFloorState();
 
-            if (scenario.robot?.start_pose != null)
+            if (scenario.Robot?.StartPose != null)
             {
-                agentStartRotation = Quaternion.Euler(0f, scenario.robot.start_pose.rotation_y_degrees, 0f);
-                SetAgentStartPosition(ToVector2(scenario.robot.start_pose.position));
+                agentStartRotation = Quaternion.Euler(0f, (float)scenario.Robot.StartPose.RotationYDegrees, 0f);
+                SetAgentStartPosition(ToVector2(scenario.Robot.StartPose.Position));
             }
             else
             {
@@ -159,9 +161,9 @@ namespace EnvForge.Navigation
                 SetAgentStartPosition(new Vector2(DefaultAgentStartPosition.x, DefaultAgentStartPosition.z));
             }
 
-            if (scenario.world?.goal?.position != null)
+            if (scenario.World?.Goal?.Position != null)
             {
-                SetGoalStartPosition(ToVector2(scenario.world.goal.position));
+                SetGoalStartPosition(ToVector2(scenario.World.Goal.Position));
             }
             else
             {
@@ -216,7 +218,7 @@ namespace EnvForge.Navigation
                 liveController,
                 episodeEventHub,
                 policyObservationProvider);
-            cloudRunPanel.Configure(this, replayPlayer, inferenceController, apiSettings, apiBaseUrl, webSocketUrlTemplate);
+            cloudRunPanel.Configure(this, replayPlayer, inferenceController, apiSettings, apiBaseUrl, webSocketBaseUrl);
 
             RebuildBoundaryWalls();
             NavigationWorldEditorPanel worldEditorPanel = gameObject.AddComponent<NavigationWorldEditorPanel>();
@@ -1088,14 +1090,14 @@ namespace EnvForge.Navigation
             return userWalls;
         }
 
-        private void ApplyUserWallsFromScenario(ScenarioBundleDto scenario)
+        private void ApplyUserWallsFromScenario(ScenarioBundle scenario)
         {
-            if (scenario.world?.static_walls == null)
+            if (scenario.World?.StaticWalls == null)
             {
                 return;
             }
 
-            foreach (StaticWallDto wall in scenario.world.static_walls)
+            foreach (StaticWall wall in scenario.World.StaticWalls)
             {
                 if (IsBoundaryWall(wall))
                 {
@@ -1103,38 +1105,38 @@ namespace EnvForge.Navigation
                 }
 
                 NavigationScenarioWallSpec wallSpec = new(
-                    string.IsNullOrWhiteSpace(wall.id) ? $"user_wall_{userWalls.Count + 1:000}" : wall.id,
+                    string.IsNullOrWhiteSpace(wall.Id) ? $"user_wall_{userWalls.Count + 1:000}" : wall.Id,
                     $"Navigation User Wall {userWalls.Count + 1}",
-                    new Vector3(wall.center?.x ?? 0f, wall.height * 0.5f, wall.center?.z ?? 0f),
-                    new Vector3(Mathf.Max(0.25f, wall.size?.x ?? DefaultUserWallLengthMeters), Mathf.Max(0.1f, wall.height), Mathf.Max(0.1f, wall.size?.z ?? wallThickness)),
-                    wall.rotation_y_degrees);
+                    new Vector3((float)(wall.Center?.X ?? 0d), (float)wall.Height * 0.5f, (float)(wall.Center?.Z ?? 0d)),
+                    new Vector3(Mathf.Max(0.25f, (float)(wall.Size?.X ?? DefaultUserWallLengthMeters)), Mathf.Max(0.1f, (float)wall.Height), Mathf.Max(0.1f, (float)(wall.Size?.Z ?? wallThickness))),
+                    (float)wall.RotationYDegrees);
                 userWalls.Add(wallSpec);
                 CreateWall(wallSpec, blockedRuntimeMaterial, episodeEvents, trackUserWall: true);
             }
         }
 
-        private void ApplyWallDimensionsFromScenario(ScenarioBundleDto scenario)
+        private void ApplyWallDimensionsFromScenario(ScenarioBundle scenario)
         {
-            if (scenario.world?.static_walls == null)
+            if (scenario.World?.StaticWalls == null)
             {
                 return;
             }
 
-            foreach (StaticWallDto wall in scenario.world.static_walls)
+            foreach (StaticWall wall in scenario.World.StaticWalls)
             {
                 if (!IsBoundaryWall(wall))
                 {
                     continue;
                 }
 
-                if (wall.height > 0f)
+                if (wall.Height > 0)
                 {
-                    wallHeight = wall.height;
+                    wallHeight = (float)wall.Height;
                 }
 
-                if (wall.size != null)
+                if (wall.Size != null)
                 {
-                    float candidateThickness = Mathf.Min(Mathf.Abs(wall.size.x), Mathf.Abs(wall.size.z));
+                    float candidateThickness = Mathf.Min(Mathf.Abs((float)wall.Size.X), Mathf.Abs((float)wall.Size.Z));
                     if (candidateThickness > 0f)
                     {
                         wallThickness = candidateThickness;
@@ -1145,31 +1147,31 @@ namespace EnvForge.Navigation
             }
         }
 
-        private static bool IsBoundaryWall(StaticWallDto wall)
+        private static bool IsBoundaryWall(StaticWall wall)
         {
             return wall != null &&
-                (wall.id == "wall_north" ||
-                 wall.id == "wall_south" ||
-                 wall.id == "wall_east" ||
-                 wall.id == "wall_west");
+                (wall.Id == "wall_north" ||
+                 wall.Id == "wall_south" ||
+                 wall.Id == "wall_east" ||
+                 wall.Id == "wall_west");
         }
 
-        private static Vector2 GetScenarioFloorSize(ScenarioBundleDto scenario)
+        private static Vector2 GetScenarioFloorSize(ScenarioBundle scenario)
         {
-            Bounds2DDto bounds = scenario.world?.bounds;
-            if (bounds?.min == null || bounds.max == null)
+            Bounds2D bounds = scenario.World?.Bounds;
+            if (bounds?.Min == null || bounds.Max == null)
             {
                 return NavigationScenarioBundleDefaults.FloorSize;
             }
 
             return new Vector2(
-                Mathf.Clamp(bounds.max.x - bounds.min.x, 1f, MaxFloorSizeMeters),
-                Mathf.Clamp(bounds.max.z - bounds.min.z, 1f, MaxFloorSizeMeters));
+                Mathf.Clamp((float)(bounds.Max.X - bounds.Min.X), 1f, MaxFloorSizeMeters),
+                Mathf.Clamp((float)(bounds.Max.Z - bounds.Min.Z), 1f, MaxFloorSizeMeters));
         }
 
-        private static Vector2 ToVector2(Vector2Dto value)
+        private static Vector2 ToVector2(Position2D value)
         {
-            return value == null ? Vector2.zero : new Vector2(value.x, value.z);
+            return value == null ? Vector2.zero : new Vector2((float)value.X, (float)value.Z);
         }
 
         private NavigationScenarioBundleSource CreateScenarioBundleSource(string scenarioId)

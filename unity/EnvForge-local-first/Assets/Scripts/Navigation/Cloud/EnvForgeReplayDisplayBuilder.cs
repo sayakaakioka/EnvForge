@@ -1,16 +1,16 @@
 using System;
 using System.Collections.Generic;
-using EnvForge.Navigation.Contracts;
+using EmbodiedLab.Contracts;
 
 namespace EnvForge.Navigation.Cloud
 {
     internal static class EnvForgeReplayDisplayBuilder
     {
-        public static List<ReplayLogStepDto> BuildDisplaySteps(
-            IReadOnlyList<ReplayLogStepDto> rawSteps,
+        public static List<ReplayLogStep> BuildDisplaySteps(
+            IReadOnlyList<ReplayLogStep> rawSteps,
             int displayEnvIndex)
         {
-            List<ReplayLogStepDto> displaySteps = new();
+            List<ReplayLogStep> displaySteps = new();
             if (rawSteps == null)
             {
                 return displaySteps;
@@ -18,8 +18,8 @@ namespace EnvForge.Navigation.Cloud
 
             for (int i = 0; i < rawSteps.Count; i++)
             {
-                ReplayLogStepDto step = rawSteps[i];
-                if (step != null && step.env_index == displayEnvIndex)
+                ReplayLogStep step = rawSteps[i];
+                if (step != null && step.EnvIndex == displayEnvIndex)
                 {
                     displaySteps.Add(step);
                 }
@@ -29,7 +29,7 @@ namespace EnvForge.Navigation.Cloud
         }
 
         public static string FormatSummary(
-            IReadOnlyList<ReplayLogStepDto> steps,
+            IReadOnlyList<ReplayLogStep> steps,
             string source,
             string scenarioSource,
             Func<string, int, string> shorten)
@@ -39,22 +39,24 @@ namespace EnvForge.Navigation.Cloud
                 return $"{source}: no steps";
             }
 
-            ReplayLogStepDto first = steps[0];
-            ReplayLogStepDto last = steps[steps.Count - 1];
-            string episode = string.IsNullOrWhiteSpace(first.episode_id) ? "episode unknown" : first.episode_id;
+            ReplayLogStep first = steps[0];
+            ReplayLogStep last = steps[steps.Count - 1];
+            string episode = string.IsNullOrWhiteSpace(first.EpisodeId) ? "episode unknown" : first.EpisodeId;
             int episodeCount = CountEpisodeSegments(steps);
             string scenario = string.IsNullOrWhiteSpace(scenarioSource) ? string.Empty : $" · {scenarioSource}";
-            return $"{source}: job {shorten(first.job_id, 18)} · scenario {first.scenario_id ?? "unknown"} · " +
-                   $"{episodeCount} ep · first {episode} · {steps.Count} steps · {last.time_seconds:0.0}s{scenario}";
+            return $"{source}: job {shorten(first.JobId, 18)} · scenario {first.ScenarioId ?? "unknown"} · " +
+                   $"{episodeCount} ep · first {episode} · {steps.Count} steps · {last.TimeSeconds:0.0}s{scenario}";
         }
 
-        private static int CountEpisodeSegments(IReadOnlyList<ReplayLogStepDto> steps)
+        private static int CountEpisodeSegments(IReadOnlyList<ReplayLogStep> steps)
         {
             int count = 0;
             string previousEpisodeId = null;
             for (int i = 0; i < steps.Count; i++)
             {
-                string episodeId = string.IsNullOrWhiteSpace(steps[i]?.episode_id) ? "episode_unknown" : steps[i].episode_id;
+                string episodeId = string.IsNullOrWhiteSpace(steps[i]?.EpisodeId)
+                    ? "episode_unknown"
+                    : steps[i].EpisodeId;
                 if (i == 0 || episodeId != previousEpisodeId)
                 {
                     count++;

@@ -1,4 +1,11 @@
-# EmbodiedLab Unity SDK 移行計画
+# EmbodiedLab Unity SDK 移行記録
+
+## 状態
+
+`EmbodiedLab.Unity` の導入と EnvForge の呼び出し元移行は実装済みである。
+Unity 6000.3.11f1 で package resolve と batchmode compile を確認済みである。
+submit、monitor、cancel、download、replay、履歴復元の実サービスを使う Play mode
+確認は手動統合確認として残る。
 
 ## 目的
 
@@ -13,7 +20,7 @@ EnvForge 固有の編集、表示、Replay、推論機能に集中する。
 - WebSocket result stream と HTTP 再同期
 - artifact location の解決と download
 - Replay Bundle manifest / chunk の取得、展開、parse
-- API error、retry、timeout、cancellation、compatibility check
+- API error、timeout、local cancellation、cloud job cancellation
 - API endpoint と WebSocket endpoint の SDK 設定
 
 現在の主な移行元は `Assets/Scripts/Navigation/Cloud` と
@@ -44,14 +51,24 @@ Replay Bundle の取得と parse は SDK に移すが、robot、wall、goal を 
   メリットとデメリット、推奨案と推奨理由を提示する。
 - 設計判断はユーザとの合意前に実装しない。
 
-## 移行方針
+## 実施した移行
 
-1. 既存 EnvForge fixture と EmbodiedLab test で現在の契約を固定する。
-2. SDK の最小 API を導入し、EnvForge の呼び出し元を一経路ずつ置き換える。
-3. 同じ責務の新旧実装を長期間併存させない。
-4. 移行済みの DTO、client、downloader は EnvForge から削除し、未移行参照を明確な
-   compile error または test failure にする。
-5. EnvForge の UI と end-to-end 動作を確認してから次の責務へ進む。
+1. EmbodiedLab の JSON Schema と fixture で契約を固定した。
+2. SDK の `EmbodiedLabJob`、`ScenarioBundleJson`、`EmbodiedLabReplay` を導入した。
+3. submit と training start を `EmbodiedLabJob.SubmitAsync` に集約した。
+4. job 監視は WebSocket-first とし、明示的な再同期だけ `RefreshAsync` を使う。
+5. `SubmissionId` と cancellation capability token を EnvForge の履歴に保存し、
+   再起動後の監視、取得、キャンセルを可能にした。
+6. Replay manifest、選択した chunk、学習済みモデルの取得と parse を SDK へ移した。
+7. EnvForge 内の旧 DTO、HTTP client、WebSocket client、downloader、serializer を削除した。
+8. review 後の hardening として、Replay の入力順保持、job 切替時の Replay 状態破棄、
+   chunk 間の前後移動と chunk-local log step 表示、history refresh と削除の競合防止、
+   terminal job の cancellation token 破棄を追加した。
+9. EnvForge の接続設定では非 loopback の平文 HTTP / WebSocket と userinfo 付き URL を
+   UI と command-line automation の両方で拒否し、履歴から削除できるローカル artifact を
+   対象 job の replay と model に限定した。
+10. Result Document の artifact metadata は `result_bundle.artifacts` だけを参照し、
+    旧 top-level `artifacts` 用の adapter は SDK と EnvForge の両方から削除した。
 
 ## 学習環境モードとの関係
 
@@ -65,16 +82,31 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
 
 ## 検証
 
-- UPM package を Git URL から追加できる。
-- EnvForge の既存 Scenario Bundle fixture が SDK 経由でも同じ意味を保つ。
-- submit、train、progress、completed result、artifact download が SDK 経由で動く。
-- Unity を再起動しても EnvForge の job history と取得済み artifact を利用できる。
-- Replay の取得処理を SDK へ移しても、既存 Replay UI と再生結果が変わらない。
+- UPM package は `EmbodiedLab.Unity` の merge commit
+  `a0a180bfa93d9c886bfdccdb3bee1c23beae80da` を指定した Git URL で固定している。
+- SDK 側では contract、transport、facade、scenario/replay API の test と lint が成功した。
+- Unity 6000.3.11f1 の batchmode で package resolve と `Assembly-CSharp`、
+  `Assembly-CSharp-Editor` の compile が成功した。
+- SDK package の Unity Test Runner は 8 件成功した。
+- EnvForge consumer boundary test 2 件で、SDK pin、旧 adapter の不在、nested artifact
+  参照を検証する。EnvForge 利用側の EditMode runner は対象 test が 0 件であり、job 切替、
+  履歴競合、Replay 順序の Unity behavior test は引き続き不足している。
+- EnvForge の replay fixture は生成済み契約の必須項目を満たす。
+- 旧実装への参照が残っていないことと JSON / Markdown / C# syntax を静的確認する。
+- Play mode での submit、monitor、cancel、download、replay、履歴復元は、実サービスへ
+  接続できる環境で最終確認する。
 
-## 保留事項
+## スコープ外・保留事項
 
-- SDK の公開 API が確定するまで、EnvForge の UI 型を SDK へ持ち込まない。
 - job history の汎用部分を将来 SDK へ移すかは、複数フロントエンドの要求が確認できるまで
   EnvForge 側に保留する。
-- 認証、private artifact、signed URL は SDK 設計に拡張点を残すが、初期移行では
-  現在の backend contract を変更しない。
+- 認証、private artifact、signed URL は今回実装しない。具体的な backend contract と
+  利用要件が決まった時点で設計し、将来用途だけの拡張点は先に追加しない。
+- SDK 全体での WebSocket message、artifact download、gzip 展開後サイズの上限は未実装で
+  ある。EnvForge 側だけでは他の SDK 利用者を保護できないため、SDK 側の別 PR で扱う。
+- SDK の endpoint 自体が非 loopback の平文 HTTP / WebSocket を拒否する変更は、既存利用者
+  への影響を確認して SDK 側の別 PR で扱う。EnvForge 利用時は今回追加した設定検証で拒否する。
+- running job の cancellation capability token は再起動後の cancel に必要な間だけ
+  `job-history.json` に平文保存し、terminal result 受信時に破棄する。現在は単一ユーザ端末と
+  OS アカウント境界を前提とする。共有端末を対象にする場合は OS protected storage を設計する。
+- `fixed` / `generated` の選択と宣言的な生成規則は、この移行とは別の設計・実装にする。

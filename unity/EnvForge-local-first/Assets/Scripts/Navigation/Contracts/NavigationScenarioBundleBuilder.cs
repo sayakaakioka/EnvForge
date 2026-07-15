@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using EmbodiedLab.Contracts;
 using UnityEngine;
 
 namespace EnvForge.Navigation.Contracts
@@ -88,10 +89,7 @@ namespace EnvForge.Navigation.Contracts
 
     public static class NavigationScenarioBundleBuilder
     {
-        public const string SchemaVersion = "scenario-bundle.v0";
-        public const string CoordinateSystem = "envforge_xz_meters";
-
-        public static ScenarioBundleDto Build(NavigationScenarioBundleSource source)
+        public static ScenarioBundle Build(NavigationScenarioBundleSource source)
         {
             IReadOnlyList<NavigationScenarioWallSpec> boundaryWalls = NavigationScenarioLayout.CreateBoundaryWalls(source.FloorSize, source.WallHeight, source.WallThickness);
             List<NavigationScenarioWallSpec> staticWalls = new(boundaryWalls);
@@ -100,164 +98,143 @@ namespace EnvForge.Navigation.Contracts
                 staticWalls.AddRange(source.UserWalls);
             }
 
-            return new ScenarioBundleDto
+            return new ScenarioBundle
             {
-                schema_version = SchemaVersion,
-                scenario_id = source.ScenarioId,
-                created_by = new CreatedByDto
+                SchemaVersion = ScenarioBundleSchemaVersion.ScenarioBundleV0,
+                ScenarioId = source.ScenarioId,
+                CreatedBy = new CreatedBy
                 {
-                    tool = "EnvForge",
-                    version = source.EnvForgeVersion,
+                    Tool = "EnvForge",
+                    Version = source.EnvForgeVersion,
                 },
-                compatibility = new CompatibilityDto
+                Compatibility = new Compatibility
                 {
-                    envforge_min_version = source.EnvForgeVersion,
-                    robot_version = "simple_robot.v1",
-                    sensor_version = "basic_sensors.v0",
+                    EnvforgeMinVersion = source.EnvForgeVersion,
+                    RobotVersion = "simple_robot.v1",
+                    SensorVersion = "basic_sensors.v0",
                 },
-                world = new WorldDto
+                World = new WorldSpec
                 {
-                    coordinate_system = CoordinateSystem,
-                    bounds = BuildCenteredBounds(source.FloorSize),
-                    static_walls = BuildStaticWalls(staticWalls),
-                    static_obstacles = new List<StaticObstacleDto>(),
-                    goal = new GoalDto
+                    CoordinateSystem = CoordinateSystem.EnvforgeXzMeters,
+                    Bounds = BuildCenteredBounds(source.FloorSize),
+                    StaticWalls = BuildStaticWalls(staticWalls),
+                    StaticObstacles = new List<StaticObstacle>(),
+                    Goal = new GoalSpec
                     {
-                        id = "goal_001",
-                        position = ToVector2Dto(source.GoalStartPosition),
-                        radius = source.GoalReachRadius,
+                        Id = "goal_001",
+                        Position = ToPosition2D(source.GoalStartPosition),
+                        Radius = source.GoalReachRadius,
                     },
                 },
-                robot = new RobotDto
+                Robot = new RobotSpec
                 {
-                    type = "simple_robot",
-                    radius = source.RobotRadiusMeters,
-                    start_pose = new Pose2DDto
+                    Type = RobotType.SimpleRobot,
+                    Radius = source.RobotRadiusMeters,
+                    StartPose = new Pose2D
                     {
-                        position = ToVector2Dto(source.AgentStartPosition),
-                        rotation_y_degrees = source.AgentStartRotation.eulerAngles.y,
+                        Position = ToPosition2D(source.AgentStartPosition),
+                        RotationYDegrees = source.AgentStartRotation.eulerAngles.y,
                     },
-                    action_space = new ActionSpaceDto
+                    ActionSpace = new ActionSpace
                     {
-                        type = "continuous",
-                        layout = new List<string> { "forward", "turn" },
+                        Type = ActionSpaceType.Continuous,
+                        Layout = new List<Layout> { Layout.Forward, Layout.Turn },
                     },
                 },
-                sensors = new List<SensorDto>
+                Sensors = new List<SensorSpec>
                 {
-                    new SensorDto
+                    new ForwardCameraSensor
                     {
-                        id = "front_camera",
-                        type = "forward_camera",
-                        width = source.SegmentationImageWidth,
-                        height = source.SegmentationImageHeight,
-                        semantic_mode = "traversable_vs_blocked",
-                        mount_height_meters = source.CameraMountHeightMeters,
-                        mount_height_min_meters = source.CameraMountHeightMinMeters,
-                        mount_height_max_meters = source.CameraMountHeightMaxMeters,
-                        pitch_degrees = source.CameraPitchDegrees,
-                        vertical_fov_degrees = source.CameraVerticalFovDegrees,
-                        near_clip_meters = source.CameraNearClipMeters,
-                        far_clip_meters = source.CameraFarClipMeters,
+                        Id = "front_camera",
+                        Width = source.SegmentationImageWidth,
+                        Height = source.SegmentationImageHeight,
+                        SemanticMode = SemanticMode.TraversableVsBlocked,
+                        MountHeightMeters = source.CameraMountHeightMeters,
+                        MountHeightMinMeters = source.CameraMountHeightMinMeters,
+                        MountHeightMaxMeters = source.CameraMountHeightMaxMeters,
+                        PitchDegrees = source.CameraPitchDegrees,
+                        VerticalFovDegrees = source.CameraVerticalFovDegrees,
+                        NearClipMeters = source.CameraNearClipMeters,
+                        FarClipMeters = source.CameraFarClipMeters,
                     },
-                    new SensorDto
+                    new DistanceSensor
                     {
-                        id = "front_distance",
-                        type = "distance_sensor",
-                        range_meters = 5.0f,
-                        direction = "forward",
+                        Id = "front_distance",
+                        RangeMeters = 5.0,
+                        Direction = SensorDirection.Forward,
                     },
                 },
-                reward = new RewardDto
+                Reward = new RewardSpec
                 {
-                    components = new List<RewardComponentDto>
+                    Components = new List<RewardComponent>
                     {
-                        new RewardComponentDto { name = "goal_reached", type = "terminal_reward", weight = source.GoalReachedReward },
-                        new RewardComponentDto { name = "goal_progress", type = "distance_delta", target = "goal_001", weight = source.GoalProgressReward },
-                        new RewardComponentDto { name = "collision_penalty", type = "collision", weight = source.CollisionPenalty },
-                        new RewardComponentDto { name = "step_penalty", type = "per_step", weight = source.StepPenalty },
-                        new RewardComponentDto { name = "wide_angle_penalty", type = "per_step", weight = source.WideAnglePenalty },
-                        new RewardComponentDto { name = "rear_angle_penalty", type = "per_step", weight = source.RearAnglePenalty },
-                        new RewardComponentDto { name = "inactive_penalty", type = "per_step", weight = source.InactivePenalty },
-                        new RewardComponentDto { name = "movement_threshold", type = "per_step", weight = source.MovementThreshold },
+                        new TerminalRewardComponent { Name = "goal_reached", Weight = source.GoalReachedReward },
+                        new DistanceDeltaRewardComponent { Name = "goal_progress", Target = "goal_001", Weight = source.GoalProgressReward },
+                        new CollisionRewardComponent { Name = "collision_penalty", Weight = source.CollisionPenalty },
+                        new PerStepRewardComponent { Name = "step_penalty", Weight = source.StepPenalty },
+                        new PerStepRewardComponent { Name = "wide_angle_penalty", Weight = source.WideAnglePenalty },
+                        new PerStepRewardComponent { Name = "rear_angle_penalty", Weight = source.RearAnglePenalty },
+                        new PerStepRewardComponent { Name = "inactive_penalty", Weight = source.InactivePenalty },
+                        new PerStepRewardComponent { Name = "movement_threshold", Weight = source.MovementThreshold },
                     },
                 },
-                training = new TrainingDto
+                Training = new TrainingSpec
                 {
-                    algorithm = "ppo",
-                    timesteps = source.TrainingTimesteps,
-                    seed = source.Seed,
-                    max_episode_steps = source.MaxEpisodeSteps,
-                    n_envs = source.NEnvs,
-                    cpu_count = source.CpuCount,
-                    torch_num_threads = source.TorchNumThreads,
-                    n_steps = source.NSteps,
-                    batch_size = source.BatchSize,
-                    gamma = source.Gamma,
-                    learning_rate = source.LearningRate,
-                    ent_coef = source.EntCoef,
-                    eval_episodes = source.EvalEpisodes,
+                    Algorithm = TrainingAlgorithm.Ppo,
+                    Timesteps = source.TrainingTimesteps,
+                    Seed = source.Seed,
+                    MaxEpisodeSteps = source.MaxEpisodeSteps,
+                    NEnvs = source.NEnvs,
+                    CpuCount = source.CpuCount,
+                    TorchNumThreads = source.TorchNumThreads,
+                    NSteps = source.NSteps,
+                    BatchSize = source.BatchSize,
+                    Gamma = source.Gamma,
+                    LearningRate = source.LearningRate,
+                    EntCoef = source.EntCoef,
+                    EvalEpisodes = source.EvalEpisodes,
                 },
             };
         }
 
-        private static Bounds2DDto BuildCenteredBounds(Vector2 floorSize)
+        private static Bounds2D BuildCenteredBounds(Vector2 floorSize)
         {
             float halfWidth = floorSize.x * 0.5f;
             float halfDepth = floorSize.y * 0.5f;
 
-            return new Bounds2DDto
+            return new Bounds2D
             {
-                min = new Vector2Dto { x = -halfWidth, z = -halfDepth },
-                max = new Vector2Dto { x = halfWidth, z = halfDepth },
+                Min = new Position2D { X = -halfWidth, Z = -halfDepth },
+                Max = new Position2D { X = halfWidth, Z = halfDepth },
             };
         }
 
-        private static List<StaticWallDto> BuildStaticWalls(IReadOnlyList<NavigationScenarioWallSpec> wallSpecs)
+        private static List<StaticWall> BuildStaticWalls(IReadOnlyList<NavigationScenarioWallSpec> wallSpecs)
         {
-            List<StaticWallDto> walls = new(wallSpecs.Count);
+            List<StaticWall> walls = new(wallSpecs.Count);
             foreach (NavigationScenarioWallSpec wallSpec in wallSpecs)
             {
-                walls.Add(new StaticWallDto
+                walls.Add(new StaticWall
                 {
-                    id = wallSpec.Id,
-                    center = ToVector2Dto(wallSpec.Center),
-                    size = ToSize2DDto(wallSpec.Size),
-                    height = wallSpec.Height,
-                    rotation_y_degrees = wallSpec.RotationYDegrees,
+                    Id = wallSpec.Id,
+                    Center = ToPosition2D(wallSpec.Center),
+                    Size = ToSize2D(wallSpec.Size),
+                    Height = wallSpec.Height,
+                    RotationYDegrees = wallSpec.RotationYDegrees,
                 });
             }
 
             return walls;
         }
 
-        private static List<StaticObstacleDto> BuildStaticObstacles(IReadOnlyList<NavigationScenarioWallSpec> wallSpecs)
+        private static Position2D ToPosition2D(Vector3 value)
         {
-            List<StaticObstacleDto> obstacles = new(wallSpecs.Count);
-            foreach (NavigationScenarioWallSpec wallSpec in wallSpecs)
-            {
-                obstacles.Add(new StaticObstacleDto
-                {
-                    id = wallSpec.Id,
-                    shape = "box",
-                    center = ToVector2Dto(wallSpec.Center),
-                    size = ToSize2DDto(wallSpec.Size),
-                    height = wallSpec.Height,
-                    rotation_y_degrees = wallSpec.RotationYDegrees,
-                });
-            }
-
-            return obstacles;
+            return new Position2D { X = value.x, Z = value.z };
         }
 
-        private static Vector2Dto ToVector2Dto(Vector3 value)
+        private static Size2D ToSize2D(Vector3 value)
         {
-            return new Vector2Dto { x = value.x, z = value.z };
-        }
-
-        private static Vector2Dto ToSize2DDto(Vector3 value)
-        {
-            return new Vector2Dto { x = value.x, z = value.z };
+            return new Size2D { X = value.x, Z = value.z };
         }
     }
 }

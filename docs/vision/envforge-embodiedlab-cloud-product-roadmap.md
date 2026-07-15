@@ -78,18 +78,21 @@ Replay Bundle は動画ではなく構造化ログとして保存する。`manif
 
 ## 現在の優先事項
 
-1. `EmbodiedLab.Unity` の責務と公開 API を確定し、独立した UPM package を作る。
-2. EnvForge の既存 Cloud / Contracts 実装を SDK 経由へ段階的に置き換える。
-3. Result Bundle / Replay Bundle / `policy.onnx` の取得と履歴復元を安定させる。
-4. 固定マップを維持したまま、宣言的な episode ごとの環境生成を追加する。
-5. EnvForge 上の Replay UI と Job details を、人間が長時間見ても読みやすい形へ整える。
-6. Replay Bundle の chunk 選択 UI と streaming load を追加する。
+`EmbodiedLab.Unity` の最小公開 API、EnvForge の SDK 移行、WebSocket-first の
+job 監視、クラウド job cancellation、Result / Replay / model 取得は完了した。
+
+次の優先事項は以下である。
+
+1. Unity 6000.3.11f1 で SDK package resolve、compile、Play mode の統合確認を行う。
+2. 固定マップを維持したまま、宣言的な episode ごとの環境生成を追加する。
+3. EnvForge 上の Replay UI と Job details を、人間が長時間見ても読みやすい形へ整える。
+4. Replay Bundle の chunk 選択 UI と streaming load を改善する。
+5. SDK と各フロントエンドの互換性検証、versioning、release 方法を決める。
 
 ## 保留事項
 
 - 認証つき GCS artifact access。
-- ジョブキャンセル、再実行、失敗時診断、quota とコスト制御。
+- ジョブ再実行、失敗時診断、quota とコスト制御。
 - Replay Bundle の巨大 chunk を全結合せずに読む streaming load。
-- EmbodiedLab API / `EmbodiedLab.Unity` / 各フロントエンドの互換性検証とリリース方法。
 - 宣言的な環境生成規則の最初の対象範囲と schema。
 - 複数ロボット、動的障害物、より高忠実度なシミュレーションへの拡張。

@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.IO;
+using EmbodiedLab.Contracts;
+using EmbodiedLab.Unity;
 using EnvForge.Navigation.Cloud;
 using EnvForge.Navigation.Contracts;
 using UnityEngine;
@@ -12,12 +14,18 @@ namespace EnvForge.Navigation.Automation
     {
         private const string SubmitArgument = "-envforgeSubmitJob";
         private const string ApiBaseUrlArgument = "-envforgeApiBaseUrl";
+        private const string WebSocketBaseUrlArgument = "-envforgeWebSocketBaseUrl";
         private const string ScenarioIdArgument = "-envforgeScenarioId";
         private const string PresetArgument = "-envforgeTrainingPreset";
         private const string VariantArgument = "-envforgeWorldVariant";
+        private const string DefaultApiBaseUrl =
+            "https://embodiedlab-api-886092613885.asia-northeast1.run.app";
+        private const string DefaultWebSocketBaseUrl =
+            "wss://embodiedlab-notification-e4dlxes4aq-an.a.run.app";
 
         private string outputPath;
         private string apiBaseUrl;
+        private string webSocketBaseUrl;
         private string scenarioId = NavigationScenarioBundleDefaults.ScenarioId;
         private string trainingPreset = "mvp";
         private string worldVariant = "default";
@@ -36,6 +44,8 @@ namespace EnvForge.Navigation.Automation
             NavigationCloudJobAutomation automation = runner.AddComponent<NavigationCloudJobAutomation>();
             automation.outputPath = output;
             automation.apiBaseUrl = NavigationAutomationArguments.GetValue(ApiBaseUrlArgument);
+            automation.webSocketBaseUrl = NavigationAutomationArguments.GetValue(
+                WebSocketBaseUrlArgument);
             automation.scenarioId = NavigationAutomationArguments.GetValue(ScenarioIdArgument) ?? NavigationScenarioBundleDefaults.ScenarioId;
             automation.trainingPreset = NavigationAutomationArguments.GetValue(PresetArgument) ?? "mvp";
             automation.worldVariant = NavigationAutomationArguments.GetValue(VariantArgument) ?? "default";
@@ -56,7 +66,6 @@ namespace EnvForge.Navigation.Automation
             CloudJobSubmissionResult result = new()
             {
                 status = "failed",
-                api_base_url = apiBaseUrl,
                 scenario_id = scenarioId,
                 training_preset = trainingPreset,
                 world_variant = worldVariant,
@@ -73,49 +82,59 @@ namespace EnvForge.Navigation.Automation
             ApplyTrainingPreset(sceneBuilder);
             NavigationWorldVariantAutomation.Apply(sceneBuilder, worldVariant);
 
-            ScenarioBundleDto scenario = sceneBuilder.BuildScenarioBundle(scenarioId);
-            result.scenario_json = ScenarioBundleSerializer.ToJson(scenario, prettyPrint: true);
-            result.training_timesteps = scenario.training?.timesteps ?? 0;
-            result.eval_episodes = scenario.training?.eval_episodes ?? 0;
+            ScenarioBundle scenario = sceneBuilder.BuildScenarioBundle(scenarioId);
+            result.scenario_json = ScenarioBundleJson.Serialize(scenario, indented: true);
+            result.training_timesteps = scenario.Training?.Timesteps ?? 0;
+            result.eval_episodes = scenario.Training?.EvalEpisodes ?? 0;
             result.floor_width = sceneBuilder.FloorSize.x;
             result.floor_depth = sceneBuilder.FloorSize.y;
             result.user_wall_count = sceneBuilder.UserWallCount;
 
             string resolvedApiBaseUrl = string.IsNullOrWhiteSpace(apiBaseUrl)
-                ? "https://embodiedlab-api-886092613885.asia-northeast1.run.app"
+                ? DefaultApiBaseUrl
                 : apiBaseUrl;
-            EnvForgeApiClient apiClient = new(resolvedApiBaseUrl);
-            bool failed = false;
-
-            yield return apiClient.SubmitScenario(
+            string resolvedWebSocketBaseUrl = string.IsNullOrWhiteSpace(webSocketBaseUrl)
+                ? DefaultWebSocketBaseUrl
+                : webSocketBaseUrl;
+            _ = SubmitJobAsync(
                 scenario,
-                response =>
-                {
-                    result.submission_id = response.submission_id;
-                    result.submit_response_status = response.status;
-                },
-                error =>
-                {
-                    failed = true;
-                    result.error = $"Submit failed: {error}";
-                });
+                result,
+                resolvedApiBaseUrl,
+                resolvedWebSocketBaseUrl);
+        }
 
-            if (!failed && !string.IsNullOrWhiteSpace(result.submission_id))
+        private async Awaitable SubmitJobAsync(
+            ScenarioBundle scenario,
+            CloudJobSubmissionResult result,
+            string resolvedApiBaseUrl,
+            string resolvedWebSocketBaseUrl)
+        {
+            try
             {
-                yield return apiClient.StartTraining(
-                    result.submission_id,
-                    response => result.train_response_status = response.status,
-                    error =>
-                    {
-                        failed = true;
-                        result.error = $"Training start failed: {error}";
-                    });
+                EmbodiedLabEndpoints endpoints = new(
+                    resolvedApiBaseUrl,
+                    resolvedWebSocketBaseUrl);
+                EnvForgeEndpointSecurity.Validate(endpoints);
+                result.api_base_url = endpoints.ApiBaseUri.AbsoluteUri;
+                result.websocket_base_url = endpoints.ResultWebSocketBaseUri.AbsoluteUri;
+                using EmbodiedLabJob job = await EmbodiedLabJob.SubmitAsync(
+                    endpoints,
+                    scenario);
+                result.submission_id = job.SubmissionId;
+                result.submit_response_status = "accepted";
+                result.train_response_status = "accepted";
+                result.status = "submitted";
+                WriteResult(result);
+                Application.Quit(0);
             }
-
-            result.status = failed ? "failed" : "submitted";
-            result.api_base_url = resolvedApiBaseUrl;
-            WriteResult(result);
-            Application.Quit(failed ? 1 : 0);
+            catch (Exception exception)
+            {
+                result.status = "failed";
+                result.error = $"Submit failed: {exception.Message}";
+                WriteResult(result);
+                Debug.LogError($"EnvForge cloud job submission failed: {exception}");
+                Application.Quit(1);
+            }
         }
 
         private void ApplyTrainingPreset(NavigationSceneBuilder sceneBuilder)
@@ -151,6 +170,7 @@ namespace EnvForge.Navigation.Automation
             public string status;
             public string error;
             public string api_base_url;
+            public string websocket_base_url;
             public string scenario_id;
             public string submission_id;
             public string submit_response_status;

@@ -2,7 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using EnvForge.Navigation.Contracts;
+using EmbodiedLab.Contracts;
+using EmbodiedLab.Unity;
 using UnityEngine;
 
 namespace EnvForge.Navigation.Cloud
@@ -49,7 +50,8 @@ namespace EnvForge.Navigation.Cloud
 
         public EnvForgeJobRecordDto UpsertSubmittedJob(
             string submissionId,
-            ScenarioBundleDto scenario,
+            string cancelToken,
+            ScenarioBundle scenario,
             string trainerSummary,
             string settingsName)
         {
@@ -60,7 +62,8 @@ namespace EnvForge.Navigation.Cloud
 
             EnvForgeJobRecordDto record = GetOrCreate(submissionId);
             record.submission_id = submissionId;
-            record.scenario_id = scenario?.scenario_id;
+            record.cancel_token = string.IsNullOrWhiteSpace(cancelToken) ? null : cancelToken;
+            record.scenario_id = scenario?.ScenarioId;
             record.settings_name = string.IsNullOrWhiteSpace(settingsName)
                 ? string.Empty
                 : settingsName.Trim();
@@ -69,21 +72,20 @@ namespace EnvForge.Navigation.Cloud
                 : record.submitted_at_utc;
             record.status = "submitted";
             record.trainer_summary = trainerSummary;
-            record.training_timesteps = scenario?.training?.timesteps ?? 0;
-            record.training_seed = scenario?.training?.seed ?? 0;
+            record.training_timesteps = scenario?.Training?.Timesteps ?? 0;
+            record.training_seed = scenario?.Training?.Seed ?? 0;
             record.scenario_bundle_json = scenario == null
                 ? string.Empty
-                : ScenarioBundleSerializer.ToJson(scenario, prettyPrint: false);
+                : ScenarioBundleJson.Serialize(scenario);
             if (string.IsNullOrWhiteSpace(record.display_name) || IsDefaultJobDisplayName(record.display_name))
             {
                 record.display_name = BuildDefaultDisplayName(record);
             }
-
             Save();
             return record;
         }
 
-        public EnvForgeJobRecordDto UpsertResult(string submissionId, ResultDocumentDto result)
+        public EnvForgeJobRecordDto UpsertResult(string submissionId, ResultDocument result)
         {
             if (string.IsNullOrWhiteSpace(submissionId) || result == null)
             {
@@ -92,27 +94,33 @@ namespace EnvForge.Navigation.Cloud
 
             EnvForgeJobRecordDto record = GetOrCreate(submissionId);
             record.submission_id = submissionId;
-            record.status = result.status;
-            record.result_updated_at = result.updated_at;
+            record.status = FormatStatus(result.Status);
+            record.result_updated_at = result.UpdatedAt;
             record.history_updated_at_utc = DateTime.UtcNow.ToString("o");
-            record.progress_phase = result.progress?.phase;
-            record.progress_current_step = result.progress?.current_step ?? 0;
-            record.progress_total_steps = result.progress?.total_steps ?? 0;
+            record.progress_phase = result.Progress == null
+                ? null
+                : FormatStatus(result.Progress.Phase);
+            record.progress_current_step = result.Progress?.CurrentStep ?? 0;
+            record.progress_total_steps = result.Progress?.TotalSteps ?? 0;
             record.display_name = string.IsNullOrWhiteSpace(record.display_name)
                 ? BuildDefaultDisplayName(record)
                 : record.display_name;
 
-            ResultBundleDto resultBundle = result.result_bundle;
+            ResultBundle resultBundle = result.ResultBundle;
             if (resultBundle != null)
             {
-                record.scenario_id = string.IsNullOrWhiteSpace(resultBundle.scenario_id)
+                record.scenario_id = string.IsNullOrWhiteSpace(resultBundle.ScenarioId)
                     ? record.scenario_id
-                    : resultBundle.scenario_id;
-                ApplyTrainingSummary(record, resultBundle.summary);
+                    : resultBundle.ScenarioId;
+                ApplyTrainingSummary(record, resultBundle.Summary);
             }
 
-            ResultArtifactsDto artifacts = result.artifacts ?? resultBundle?.artifacts;
-            ApplyArtifactMetadata(record, artifacts);
+            ApplyArtifactMetadata(record, result.ResultBundle?.Artifacts);
+            if (IsTerminalStatus(result.Status))
+            {
+                record.cancel_token = null;
+            }
+
             Save();
             return record;
         }
@@ -293,26 +301,40 @@ namespace EnvForge.Navigation.Cloud
                 displayName.StartsWith("Job ", StringComparison.Ordinal);
         }
 
-        private static void ApplyTrainingSummary(EnvForgeJobRecordDto record, TrainingSummaryDto summary)
+        private static void ApplyTrainingSummary(EnvForgeJobRecordDto record, TrainingSummary summary)
         {
             if (summary == null)
             {
                 return;
             }
 
-            record.training_timesteps = summary.training_timesteps;
-            record.training_seed = summary.training_seed;
+            record.training_timesteps = summary.TrainingTimesteps;
+            record.training_seed = summary.TrainingSeed;
         }
 
-        private static void ApplyArtifactMetadata(EnvForgeJobRecordDto record, ResultArtifactsDto artifacts)
+        private static void ApplyArtifactMetadata(EnvForgeJobRecordDto record, ResultArtifacts artifacts)
         {
             if (artifacts == null)
             {
                 return;
             }
 
-            record.replay_artifact_path = artifacts.replay_bundle?.path;
-            record.onnx_artifact_path = artifacts.onnx_model?.path;
+            record.replay_artifact_path = artifacts.ReplayBundle?.Path;
+            record.onnx_artifact_path = artifacts.OnnxModel?.Path ??
+                artifacts.SentisModel?.Path ??
+                artifacts.Model?.Path;
+        }
+
+        private static string FormatStatus(ResultStatus status)
+        {
+            return status.ToString().ToLowerInvariant();
+        }
+
+        private static bool IsTerminalStatus(ResultStatus status)
+        {
+            return status == ResultStatus.Completed ||
+                status == ResultStatus.Failed ||
+                status == ResultStatus.Cancelled;
         }
 
         [Serializable]
@@ -328,6 +350,7 @@ namespace EnvForge.Navigation.Cloud
         public string submission_id;
         public string display_name;
         public string settings_name;
+        public string cancel_token;
         public string scenario_id;
         public string submitted_at_utc;
         public string result_updated_at;

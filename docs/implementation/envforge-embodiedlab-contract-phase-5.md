@@ -1,5 +1,9 @@
 # EnvForge / EmbodiedLab 契約実装 Phase 5
 
+> この文書は Phase 5 当時の実装記録である。現在の cloud transport、WebSocket
+> lifecycle、artifact download は `EmbodiedLab.Unity` へ移行済みであり、現行方針は
+> `embodiedlab-unity-sdk-migration.md` を参照する。
+
 ## 目的
 
 Phase 5 では、EmbodiedLab が生成した学習結果を EnvForge 側で取得し、

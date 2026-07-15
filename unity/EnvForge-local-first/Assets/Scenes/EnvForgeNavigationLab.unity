@@ -481,7 +481,7 @@ MonoBehaviour:
   goalVisualMaterial: {fileID: 2100000, guid: 1cb1a4ecb3ca4df99caa2504e8ab5a06, type: 2}
   apiSettings: {fileID: 0}
   apiBaseUrl: https://embodiedlab-api-886092613885.asia-northeast1.run.app
-  webSocketUrlTemplate: wss://embodiedlab-notification-e4dlxes4aq-an.a.run.app/ws/results/{submission_id}
+  webSocketBaseUrl: wss://embodiedlab-notification-e4dlxes4aq-an.a.run.app
   showCloudRunPanel: 1
   trainingSettings:
     timesteps: 5000
