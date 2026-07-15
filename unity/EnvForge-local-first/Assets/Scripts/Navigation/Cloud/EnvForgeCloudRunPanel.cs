@@ -966,7 +966,7 @@ namespace EnvForge.Navigation.Cloud
 
         private ResultArtifacts GetResultArtifacts()
         {
-            return EnvForgeResultArtifacts.Resolve(latestResult);
+            return latestResult?.ResultBundle?.Artifacts;
         }
 
         private bool IsCompletedResult()
