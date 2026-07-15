@@ -87,9 +87,10 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
 - SDK 側では contract、transport、facade、scenario/replay API の test と lint が成功した。
 - Unity 6000.3.11f1 の batchmode で package resolve と `Assembly-CSharp`、
   `Assembly-CSharp-Editor` の compile が成功した。
-- SDK package の Unity Test Runner は 8 件成功した。EnvForge 利用側の EditMode runner は
-  対象 test が 0 件であり、利用側固有の job 切替、履歴競合、Replay 順序の自動 test は
-  引き続き不足している。
+- SDK package の Unity Test Runner は 8 件成功した。
+- EnvForge consumer boundary test 2 件で、SDK pin、旧 adapter の不在、nested artifact
+  参照を検証する。EnvForge 利用側の EditMode runner は対象 test が 0 件であり、job 切替、
+  履歴競合、Replay 順序の Unity behavior test は引き続き不足している。
 - EnvForge の replay fixture は生成済み契約の必須項目を満たす。
 - 旧実装への参照が残っていないことと JSON / Markdown / C# syntax を静的確認する。
 - Play mode での submit、monitor、cancel、download、replay、履歴復元は、実サービスへ
