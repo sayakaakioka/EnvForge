@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "active_retention": [],
+  "released_retention": [
+    {
+      "retention_id": "RETAIN-2026-06-29-latest-successful-navigation",
+      "submission_id": "274301e2-76f9-4482-9bc7-933147b82320",
+      "gcs_prefix": "gs://embodiedlab-models/results/274301e2-76f9-4482-9bc7-933147b82320/",
+      "firestore_documents": [
+        "submissions/274301e2-76f9-4482-9bc7-933147b82320",
+        "results/274301e2-76f9-4482-9bc7-933147b82320",
+        "job_debug/274301e2-76f9-4482-9bc7-933147b82320"
+      ],
+      "cloud_run_execution": "embodiedlab-trainer-fch9d",
+      "released_on": "2026-07-01",
+      "release_reason": "Superseded by the simple_robot.v1 robot.radius contract.",
+      "last_verified_on": "2026-07-19",
+      "verification": {
+        "firestore_submissions": "not_found",
+        "firestore_results": "not_found",
+        "firestore_job_debug": "not_found",
+        "gcs_live_prefix": "not_found",
+        "gcs_soft_deleted_prefix": "not_found",
+        "cloud_run_execution": "not_found",
+        "cloud_logging": "not_found"
+      }
+    }
+  ]
+}
