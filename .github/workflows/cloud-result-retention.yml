@@ -1,0 +1,25 @@
+name: Cloud result retention
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cloud-result-retention.yml"
+      - "docs/implementation/cloud-result-retention.json"
+      - "docs/implementation/cloud-result-retention.md"
+      - "tests/test_cloud_result_retention.py"
+  pull_request:
+    paths:
+      - ".github/workflows/cloud-result-retention.yml"
+      - "docs/implementation/cloud-result-retention.json"
+      - "docs/implementation/cloud-result-retention.md"
+      - "tests/test_cloud_result_retention.py"
+
+jobs:
+  ledger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate retention ledger
+        run: python3 -m unittest tests/test_cloud_result_retention.py
