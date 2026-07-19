@@ -27,10 +27,10 @@ the `com.embodiedlab.unity` package. EnvForge is responsible for:
 
 `EmbodiedLab.Unity` submits and starts jobs, monitors progress over WebSocket,
 performs explicit HTTP resynchronization, cancels jobs, serializes the shared
-contracts, and downloads model and replay artifacts.
-
-The ONNX Runtime Unity files under `Assets/Plugins/ONNXRuntime/` are part of
-the active path and should stay in the Unity project.
+contracts, downloads model and replay artifacts, and distributes the tested
+ONNX Runtime managed and Windows x64 native binaries. EnvForge owns the
+navigation-specific inference behavior and UI without keeping a second local
+plugin copy.
 
 ## Unity Workflow
 

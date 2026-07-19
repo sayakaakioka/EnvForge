@@ -2,7 +2,8 @@
 
 ## 状態
 
-`EmbodiedLab.Unity` の導入と EnvForge の呼び出し元移行は実装済みである。
+`EmbodiedLab.Unity` の導入、EnvForge の呼び出し元移行、共有 ONNX Runtime binary の
+package 所有への集約は実装済みである。
 Unity 6000.3.11f1 で package resolve と batchmode compile を確認済みである。
 submit、monitor、cancel、download、replay、履歴復元の実サービスを使う Play mode
 確認は手動統合確認として残る。
@@ -22,6 +23,7 @@ EnvForge 固有の編集、表示、Replay、推論機能に集中する。
 - Replay Bundle manifest / chunk の取得、展開、parse
 - API error、timeout、local cancellation、cloud job cancellation
 - API endpoint と WebSocket endpoint の SDK 設定
+- ONNX Runtime managed assembly と Windows x64 native binary の配布・versioning
 
 現在の主な移行元は `Assets/Scripts/Navigation/Cloud` と
 `Assets/Scripts/Navigation/Contracts` である。ただし、ディレクトリ単位で機械的に
@@ -69,6 +71,9 @@ Replay Bundle の取得と parse は SDK に移すが、robot、wall、goal を 
    対象 job の replay と model に限定した。
 10. Result Document の artifact metadata は `result_bundle.artifacts` だけを参照し、
     旧 top-level `artifacts` 用の adapter は SDK と EnvForge の両方から削除した。
+11. SDK package を package-owned ONNX Runtime を含む merge commit へ更新し、EnvForge の
+    `Assets/Plugins/ONNXRuntime` を削除した。EnvForge は navigation 固有の推論契約、
+    observation 生成、motion、UI のみを所有する。
 
 ## 学習環境モードとの関係
 
@@ -82,15 +87,22 @@ SDK は mode と生成規則の DTO、serialization、compatibility check を担
 
 ## 検証
 
-- UPM package は `EmbodiedLab.Unity` の merge commit
-  `a0a180bfa93d9c886bfdccdb3bee1c23beae80da` を指定した Git URL で固定している。
+- UPM package は package-owned ONNX Runtime を含む `EmbodiedLab.Unity` の merge commit
+  `b96a46779bef8ed24af77d9aecf49f94150d8afa` を指定した Git URL で固定している。
 - SDK 側では contract、transport、facade、scenario/replay API の test と lint が成功した。
 - Unity 6000.3.11f1 の batchmode で package resolve と `Assembly-CSharp`、
   `Assembly-CSharp-Editor` の compile が成功した。
 - SDK package の Unity Test Runner は 8 件成功した。
-- EnvForge consumer boundary test 2 件で、SDK pin、旧 adapter の不在、nested artifact
-  参照を検証する。EnvForge 利用側の EditMode runner は対象 test が 0 件であり、job 切替、
+- EnvForge consumer boundary test 3 件で、SDK pin、package dependency、ローカル ONNX Runtime
+  重複の不在、旧 adapter の不在、nested artifact 参照を検証する。EnvForge 利用側の
+  EditMode runner は対象 test が 0 件であり、job 切替、
   履歴競合、Replay 順序の Unity behavior test は引き続き不足している。
+- 2026-07-19 に Unity 6000.3.11f1 で package resolve と batchmode compile を再実行し、
+  `b96a46779bef8ed24af77d9aecf49f94150d8afa` の package plugin だけが import されること、
+  duplicate assembly / native plugin warning がないことを確認した。
+- 同日に実際の download 済み `policy.onnx` を使い、Editor Play Mode と Windows x64
+  Standalone の両方で camera observation、ONNX 実行、action 適用を 3 step 実行した。
+  Standalone 出力には managed assembly、native runtime、shared provider が各 1 個だけ含まれる。
 - EnvForge の replay fixture は生成済み契約の必須項目を満たす。
 - 旧実装への参照が残っていないことと JSON / Markdown / C# syntax を静的確認する。
 - Play mode での submit、monitor、cancel、download、replay、履歴復元は、実サービスへ

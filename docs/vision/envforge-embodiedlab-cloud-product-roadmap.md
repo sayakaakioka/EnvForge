@@ -24,9 +24,10 @@ EnvForge の現行 runtime は ML-Agents を使わない。学習は EmbodiedLab
 EnvForge は `policy.onnx` を正本としてローカル推論する。
 
 EnvForge には、世界編集、Unity scene からの Scenario Bundle 構築、クラウド操作 UI、
-ローカル履歴、Replay の可視化、ONNX Runtime 推論を残す。API transport、ジョブ状態の
-同期、artifact location の解決、Replay Bundle の取得と読み込みは
-`EmbodiedLab.Unity` へ移す。
+ローカル履歴、Replay の可視化、navigation 固有の ONNX Runtime 推論ロジックを残す。
+API transport、ジョブ状態の同期、artifact location の解決、Replay Bundle の取得と
+読み込み、共有する ONNX Runtime managed / Windows x64 native binary の配布と versioning は
+`EmbodiedLab.Unity` が所有する。EnvForge は同じ binary のローカルコピーを持たない。
 
 過去の MVP 実装、ローカル ML-Agents trainer、Python 環境、古い学習成果物は
 現行仕様を動かすためのコードとして保持しない。必要になった場合は Git 履歴を参照する。
