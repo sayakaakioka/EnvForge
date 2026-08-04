@@ -4,7 +4,7 @@ namespace EnvForge.Navigation
 {
     public sealed class NavigationGoalObservationProvider : MonoBehaviour
     {
-        [SerializeField] private float goalRadius = 1.2f;
+        [SerializeField] private float goalRadius = Contracts.NavigationScenarioBundleDefaults.GoalRadiusMeters;
         [SerializeField] private float frontDistanceRangeMeters = 5f;
         [SerializeField] private LayerMask frontDistanceLayers = ~0;
 
@@ -12,7 +12,10 @@ namespace EnvForge.Navigation
 
         public float MaxExpectedDistanceMeters { get; private set; } = 1f;
 
-        public void Configure(NavigationMetrics metrics, float maxDistance, float radius = 1.2f)
+        public void Configure(
+            NavigationMetrics metrics,
+            float maxDistance,
+            float radius = Contracts.NavigationScenarioBundleDefaults.GoalRadiusMeters)
         {
             navigationMetrics = metrics;
             MaxExpectedDistanceMeters = Mathf.Max(0.01f, maxDistance);

@@ -20,11 +20,13 @@ SDK 公開 API と EnvForge 移行は
 
 ## High
 
-### ARCH-001: SDK 公開 API への再移行
+### ARCH-001: SDK target build 検証
 
-- `EmbodiedLab.Unity` の新しい server-owned lifecycle と artifact / Replay API に追従する。
-- EnvForge の旧 SDK 呼び出しと重複 code を削除する。
-- Windows、Ubuntu、macOS target を個別に検証する。
+- server-owned lifecycle と artifact / Replay API への code 移行は完了している。
+- Windows x64 は local inference を含む package / application build を検証する。
+- Ubuntu x64 と macOS は cloud / result / replay の package / application build を検証する。
+- 実 Cloud job で verified artifact download と Replay を確認し、Windows x64 では
+  local inference も目視確認する。
 
 ### UX-013 / UX-018 / UX-029 / UX-035 / UX-037 / UX-038: Library
 

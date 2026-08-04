@@ -4,7 +4,7 @@ namespace EnvForge.Navigation
 {
     public sealed class GoalReachChecker : MonoBehaviour
     {
-        [SerializeField] private float reachRadius = 1.2f;
+        [SerializeField] private float reachRadius = EnvForge.Navigation.Contracts.NavigationScenarioBundleDefaults.GoalRadiusMeters;
 
         private INavigationEpisodeEvents episodeEvents;
         private NavigationMetrics navigationMetrics;

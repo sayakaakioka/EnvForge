@@ -7,8 +7,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 UNITY_PROJECT = ROOT / "unity" / "EnvForge-local-first"
 CLOUD_SOURCE = UNITY_PROJECT / "Assets" / "Scripts" / "Navigation" / "Cloud"
+INFERENCE_SOURCE = (
+    UNITY_PROJECT
+    / "Assets"
+    / "Scripts"
+    / "Navigation"
+    / "Inference"
+    / "NavigationModelInferenceController.cs"
+)
 LOCAL_ONNX_RUNTIME = UNITY_PROJECT / "Assets" / "Plugins" / "ONNXRuntime"
-SDK_REVISION = "b96a46779bef8ed24af77d9aecf49f94150d8afa"
+SDK_REVISION = "abb976ea97b1010fb3a6dbfb177cefdde5aa90b6"
 SDK_URL = "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#" + SDK_REVISION
 
 
@@ -71,6 +79,20 @@ class EmbodiedLabUnityBoundaryTests(unittest.TestCase):
         )
         self.assertIn("latestResult?.ResultBundle?.Artifacts", panel)
         self.assertIn("result.ResultBundle?.Artifacts", history)
+
+    def test_replay_manifest_reads_include_job_identity(self):
+        panel = (CLOUD_SOURCE / "EnvForgeCloudRunPanel.cs").read_text(encoding="utf-8")
+        self.assertIsNone(
+            re.search(r"EmbodiedLabReplay\.ReadManifest\(\s*manifestPath\s*\)", panel)
+        )
+
+    def test_local_inference_does_not_reapply_policy_output_mapping(self):
+        inference = INFERENCE_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("float forward = rawForward;", inference)
+        self.assertIn("float turn = rawTurn;", inference)
+        self.assertNotIn("Mathf.Exp(-rawForward)", inference)
+        self.assertIn("rawForward < 0f || rawForward > 1f", inference)
+        self.assertIn("rawTurn < -1f || rawTurn > 1f", inference)
 
     @staticmethod
     def _read_json(path):

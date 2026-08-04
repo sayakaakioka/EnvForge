@@ -25,13 +25,15 @@ the `com.embodiedlab.unity` package. EnvForge is responsible for:
 - replaying train/eval trajectories in Unity
 - running local ONNX Runtime inference against the current scene
 
-`EmbodiedLab.Unity` submits and starts jobs, monitors progress over WebSocket,
-performs explicit HTTP resynchronization, cancels jobs, serializes the shared
-contracts, downloads model and replay artifacts, and distributes the ONNX
-Runtime integration. The current package pin includes a tested Windows x64
-native binary; Ubuntu and macOS are separate target builds that still require
-package and build verification. EnvForge owns the navigation-specific inference
-behavior and UI without keeping a second local plugin copy.
+`EmbodiedLab.Unity` submits jobs, monitors progress over WebSocket, performs
+explicit HTTP resynchronization, cancels jobs, serializes the shared contracts,
+and verifies model and replay artifacts before committing downloads. Training
+dispatch after submission acceptance is owned by the EmbodiedLab server. Cloud,
+result, and replay workflows target Windows x64, Ubuntu x64, and macOS. The
+currently bundled native ONNX Runtime integration supports Windows x64 local
+inference; Ubuntu and macOS local inference require their native integrations
+and target validation. EnvForge owns the navigation-specific inference behavior
+and UI without keeping a second local plugin copy.
 
 ## Unity Workflow
 
@@ -60,8 +62,9 @@ The current main groups are:
 The shared Scenario, Result, and Replay contract types and the HTTP/WebSocket
 clients live in the separate
 [`EmbodiedLab.Unity`](https://github.com/sayakaakioka/EmbodiedLab.Unity)
-repository. This project pins the package to a tested commit in
-`Packages/manifest.json`.
+repository. This project pins the package to a specific SDK main commit in
+`Packages/manifest.json`; validation status for each EnvForge target is tracked
+under `docs/implementation/`.
 
 ## Artifacts
 
@@ -76,8 +79,8 @@ Result artifacts currently include:
 - `replay/eval/*.jsonl.gz`
 
 Replay is structured data, not video. EnvForge downloads the Replay Bundle
-manifest, fetches the listed chunks, and loads the resulting timeline into the
-Unity replay player.
+manifest, fetches selected chunks on demand, and loads each selected timeline
+into the Unity replay player.
 
 ## Development Commands
 

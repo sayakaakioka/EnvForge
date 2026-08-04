@@ -198,6 +198,6 @@ Editor 同梱の Licensing Client は、典型的には以下の path で動く�
 
 ## 保留
 
-- この手順を Makefile や helper script に包むかどうか。 - standalone `unity` CLI
-  を導入するかどうか。 - CI 上で同じ方針が通用するかどうか。 - GUI の Unity Hub
-  が起動していない状態でも安定するかどうか。
+- standalone `unity` CLI を導入するかどうか。
+- CI 上で同じ方針が通用するかどうか。
+- GUI の Unity Hub が起動していない状態でも安定するかどうか。

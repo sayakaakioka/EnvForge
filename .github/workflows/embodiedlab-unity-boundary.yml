@@ -6,6 +6,9 @@ on:
       - ".github/workflows/embodiedlab-unity-boundary.yml"
       - "tests/test_embodiedlab_unity_boundary.py"
       - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Cloud/**"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Contracts/**"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Inference/**"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/NavigationSceneBuilder.cs"
       - "unity/EnvForge-local-first/Packages/manifest.json"
       - "unity/EnvForge-local-first/Packages/packages-lock.json"
   push:
@@ -15,6 +18,9 @@ on:
       - ".github/workflows/embodiedlab-unity-boundary.yml"
       - "tests/test_embodiedlab_unity_boundary.py"
       - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Cloud/**"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Contracts/**"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/Inference/**"
+      - "unity/EnvForge-local-first/Assets/Scripts/Navigation/NavigationSceneBuilder.cs"
       - "unity/EnvForge-local-first/Packages/manifest.json"
       - "unity/EnvForge-local-first/Packages/packages-lock.json"
 

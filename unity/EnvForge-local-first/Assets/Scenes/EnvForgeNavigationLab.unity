@@ -462,9 +462,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::EnvForge.Navigation.NavigationSceneBuilder
   floorSize: {x: 16, y: 12}
-  wallHeight: 1.8
+  wallHeight: 2
   wallThickness: 0.35
-  goalReachRadius: 1.2
+  goalReachRadius: 0.45
   saveSegmentationFrames: 0
   saveSegmentationEverySteps: 100
   showSegmentationPreview: 1

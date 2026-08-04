@@ -6,7 +6,7 @@ WebSocket, artifact-download, or contract-serialization implementation.
 
 ## Package
 
-The Unity project pins a tested `EmbodiedLab.Unity` merge commit in
+The Unity project pins a specific `EmbodiedLab.Unity` main commit in
 `Packages/manifest.json`:
 
 ```json
@@ -19,10 +19,8 @@ The Unity project pins a tested `EmbodiedLab.Unity` merge commit in
 Update the commit only after the SDK contract and transport checks pass and the
 EnvForge project resolves and compiles with the new revision.
 
-The current pin uses the first SDK integration. The next package update will
-adopt the server-owned lifecycle and artifact verification described in
-`docs/implementation/embodiedlab-unity-sdk-migration.md`; do not preserve the
-old lifecycle through a compatibility adapter.
+The current pin uses the server-owned lifecycle and strict artifact validation.
+Do not preserve an older lifecycle through a compatibility adapter.
 
 ## Unity Configuration
 
@@ -39,7 +37,9 @@ Configure these fields:
 
 The HTTP API and notification service can use different hosts, so EnvForge does
 not derive one endpoint from the other. The SDK appends the current result-stream
-path and submission ID to the WebSocket base URL.
+path and submission ID to the WebSocket base URL. Remote services must use
+`https://` and `wss://`; plain `http://` and `ws://` are accepted only for
+loopback development endpoints.
 
 Do not commit bearer tokens, cancellation capability tokens, signed URLs, or
 private endpoint assets.
@@ -57,11 +57,13 @@ EmbodiedLabJob job = await EmbodiedLabJob.SubmitAsync(
     cancellationToken);
 ```
 
-`SubmitAsync` creates the submission and starts training as one operation. The
-Cloud panel then uses `WaitForCompletionAsync`. Monitoring is WebSocket-first;
-HTTP reads are used by explicit `RefreshAsync` calls and SDK recovery after a
-failed, disconnected, or silent stream. EnvForge does not run periodic HTTP
-polling.
+`SubmitAsync` accepts the Scenario and returns the server-created job handle.
+The server owns training dispatch after submission acceptance; the Unity client
+does not make a separate training-start request or attempt to repair dispatch
+failures. The Cloud panel then uses `WaitForCompletionAsync`. Monitoring is
+WebSocket-first; HTTP reads are used by explicit `RefreshAsync` calls and SDK
+recovery after a failed, disconnected, or silent stream. EnvForge does not run
+periodic HTTP polling.
 
 The current result states are:
 
@@ -87,13 +89,15 @@ requests cancellation of the remote training job.
 
 ## Persistence and Cancellation Capability
 
-EnvForge stores the submission ID and cancellation capability token in its local
-job history. It restores the SDK handle after a restart:
+EnvForge stores the submission ID, Scenario ID, and optional cancellation
+capability token in its local job history. It restores the SDK handle after a
+restart:
 
 ```csharp
 EmbodiedLabJob job = EmbodiedLabJob.Restore(
     endpoints,
     savedSubmissionId,
+    savedScenarioId,
     savedCancelToken);
 ```
 
@@ -114,20 +118,30 @@ selects a chunk, and downloads only that chunk:
 
 ```csharp
 await job.DownloadReplayBundleAsync(manifestPath, cancellationToken);
-ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(manifestPath);
+ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(
+    manifestPath,
+    job.SubmissionId,
+    job.ScenarioId);
 
 await job.DownloadReplayChunkAsync(chunk, chunkPath, cancellationToken);
-IReadOnlyList<ReplayLogStep> steps = EmbodiedLabReplay.ReadSteps(chunkPath);
+IReadOnlyList<ReplayLogStep> steps = EmbodiedLabReplay.ReadChunk(
+    chunkPath,
+    chunk,
+    job.SubmissionId,
+    job.ScenarioId);
 ```
 
-Scenario JSON and bundled replay JSON Lines use `ScenarioBundleJson` and
-`EmbodiedLabReplay.ParseSteps`. The generated contract types come from the
-versioned JSON Schemas in EmbodiedLab; EnvForge-specific duplicate DTOs are not
-kept.
+Scenario JSON uses `ScenarioBundleJson`. Downloaded Replay Bundle data is read
+through the identity- and metadata-checking manifest/chunk APIs shown above.
+The generated contract types come from the versioned JSON Schemas in
+EmbodiedLab; EnvForge-specific duplicate DTOs are not kept.
 
-Artifacts are saved below `Application.persistentDataPath`, not inside the
-repository. EnvForge keeps local paths and presentation state in its own job
-history because those are frontend concerns.
+The SDK verifies the declared byte size and SHA-256 digest before atomically
+replacing a local artifact. Replay parsing also verifies job, Scenario, chunk,
+phase, checkpoint, and step metadata. Artifacts are saved below
+`Application.persistentDataPath`, not inside the repository. EnvForge keeps
+local paths and presentation state in its own job history because those are
+frontend concerns.
 
 ## Command-Line Submission
 
@@ -146,10 +160,12 @@ ID, scenario JSON, and scene summary.
 
 ## Current Boundary
 
-EnvForge owns scene authoring, UI, local history, replay visualization, and local
-inference. `EmbodiedLab.Unity` owns shared contracts, serialization, cloud job
-transport, monitoring, cancellation, and artifact retrieval. The EmbodiedLab
-backend remains the source of truth for server behavior and JSON Schemas.
+EnvForge owns scene authoring, UI, local history, replay visualization, and the
+navigation-specific ONNX session checks and observation/action mapping.
+`EmbodiedLab.Unity` owns shared contracts, serialization, cloud job transport,
+monitoring, cancellation, artifact metadata checks, and verified retrieval. The
+EmbodiedLab backend remains the source of truth for server behavior and JSON
+Schemas.
 
 Authentication and private artifact access are not implemented yet. They will be
 designed only after a concrete backend contract and usage requirement exist.

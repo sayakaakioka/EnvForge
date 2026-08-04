@@ -222,15 +222,47 @@ namespace EnvForge.Navigation.Cloud
                 settingsNameText = recentJob.settings_name;
             }
 
-            if (endpoints != null && !string.IsNullOrWhiteSpace(submissionId))
+            if (TryRestoreJob(recentJob, out EmbodiedLabJob restoredJob, out string restoreError))
             {
-                SetActiveJob(EmbodiedLabJob.Restore(
-                    endpoints,
-                    submissionId,
-                    recentJob.cancel_token));
+                SetActiveJob(restoredJob);
+                status = $"Cloud: restored {Shorten(recentJob.submission_id, 18)}";
+                return;
             }
 
-            status = $"Cloud: restored {Shorten(recentJob.submission_id, 18)}";
+            status = $"Cloud: restore unavailable · {restoreError}";
+        }
+
+        private bool TryRestoreJob(
+            EnvForgeJobRecordDto record,
+            out EmbodiedLabJob restoredJob,
+            out string error)
+        {
+            restoredJob = null;
+            if (endpoints == null)
+            {
+                error = "endpoints are not configured";
+                return false;
+            }
+
+            if (record == null || string.IsNullOrWhiteSpace(record.submission_id))
+            {
+                error = "submission ID is missing";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(record.scenario_id))
+            {
+                error = "Scenario ID is missing from job history";
+                return false;
+            }
+
+            restoredJob = EmbodiedLabJob.Restore(
+                endpoints,
+                record.submission_id,
+                record.scenario_id,
+                record.cancel_token);
+            error = null;
+            return true;
         }
 
         private void OnGUI()
@@ -829,8 +861,7 @@ namespace EnvForge.Navigation.Cloud
             if (artifacts == null ||
                 (artifacts.ReplayBundle == null &&
                  artifacts.OnnxModel == null &&
-                 artifacts.SentisModel == null &&
-                 artifacts.Model == null))
+                 artifacts.SentisModel == null))
             {
                 return;
             }
@@ -871,7 +902,10 @@ namespace EnvForge.Navigation.Cloud
                     return;
                 }
 
-                ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(manifestPath);
+                ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(
+                    manifestPath,
+                    job.SubmissionId,
+                    job.ScenarioId);
                 ConfigureActiveReplayBundle(manifest, manifestPath);
                 jobHistoryStore.SetLocalReplayManifestPath(submissionId, manifestPath);
                 status = "Cloud: replay manifest ready";
@@ -918,8 +952,7 @@ namespace EnvForge.Navigation.Cloud
             }
 
             if (artifacts.OnnxModel != null ||
-                artifacts.SentisModel != null ||
-                artifacts.Model != null)
+                artifacts.SentisModel != null)
             {
                 await DownloadModelArtifactsAsync();
             }
@@ -1010,7 +1043,9 @@ namespace EnvForge.Navigation.Cloud
                 return "none";
             }
 
-            return $"cpu {settings.CpuCount} · torch {settings.TorchNumThreads}";
+            string cpuCount = settings.CpuCount?.ToString(CultureInfo.InvariantCulture) ?? "auto";
+            string torchNumThreads = settings.TorchNumThreads?.ToString(CultureInfo.InvariantCulture) ?? "auto";
+            return $"cpu {cpuCount} · torch {torchNumThreads}";
         }
 
         private static string FormatSensorSummary(NavigationTrainingSettings settings)
@@ -1069,7 +1104,7 @@ namespace EnvForge.Navigation.Cloud
 
             foreach (ReplayBundleChunk chunk in manifest.Chunks)
             {
-                if (chunk == null || string.IsNullOrWhiteSpace(chunk.Path))
+                if (chunk == null || string.IsNullOrWhiteSpace(GetReplayChunkPath(chunk)))
                 {
                     continue;
                 }
@@ -1106,6 +1141,13 @@ namespace EnvForge.Navigation.Cloud
                 while (candidateChunkIndex >= 0 && candidateChunkIndex < activeReplayChunks.Count)
                 {
                     ReplayBundleChunk chunk = activeReplayChunks[candidateChunkIndex];
+                    EmbodiedLabJob job = activeJob;
+                    if (job == null)
+                    {
+                        status = "Replay job handle is unavailable";
+                        return;
+                    }
+
                     string localChunkPath = GetLocalReplayChunkPath(chunk);
                     if (string.IsNullOrEmpty(localChunkPath))
                     {
@@ -1115,13 +1157,6 @@ namespace EnvForge.Navigation.Cloud
 
                     if (!File.Exists(localChunkPath))
                     {
-                        EmbodiedLabJob job = activeJob;
-                        if (job == null)
-                        {
-                            status = "Replay job handle is unavailable";
-                            return;
-                        }
-
                         status = $"Cloud: downloading replay {FormatReplayChunkLabel(chunk)}";
                         await job.DownloadReplayChunkAsync(
                             chunk,
@@ -1140,7 +1175,11 @@ namespace EnvForge.Navigation.Cloud
                     }
 
                     IReadOnlyList<ReplayLogStep> chunkSteps =
-                        EmbodiedLabReplay.ReadSteps(localChunkPath);
+                        EmbodiedLabReplay.ReadChunk(
+                            localChunkPath,
+                            chunk,
+                            job.SubmissionId,
+                            job.ScenarioId);
                     List<ReplayLogStep> displaySteps = EnvForgeReplayDisplayBuilder.BuildDisplaySteps(
                         chunkSteps,
                         ReplayDisplayEnvIndex);
@@ -1213,9 +1252,10 @@ namespace EnvForge.Navigation.Cloud
             }
 
             string outputDir = Path.GetDirectoryName(manifestPath);
+            string chunkPath = GetReplayChunkPath(chunk);
             return string.IsNullOrEmpty(outputDir)
                 ? string.Empty
-                : TryBuildSafeChildPath(outputDir, chunk.Path, out string localPath)
+                : TryBuildSafeChildPath(outputDir, chunkPath, out string localPath)
                     ? localPath
                     : string.Empty;
         }
@@ -1257,8 +1297,23 @@ namespace EnvForge.Navigation.Cloud
                 return "chunk";
             }
 
-            string phase = chunk.Phase.ToString().ToLowerInvariant();
+            string phase = chunk switch
+            {
+                TrainReplayBundleChunk => "train",
+                EvalReplayBundleChunk => "eval",
+                _ => "chunk",
+            };
             return $"{phase} {FormatSteps(chunk.CheckpointStep)}";
+        }
+
+        private static string GetReplayChunkPath(ReplayBundleChunk chunk)
+        {
+            return chunk switch
+            {
+                TrainReplayBundleChunk training => training.Path,
+                EvalReplayBundleChunk evaluation => evaluation.Path,
+                _ => null,
+            };
         }
 
         private void DrawJobDetails(Rect panelRect)
@@ -1495,12 +1550,16 @@ namespace EnvForge.Navigation.Cloud
             activeScenarioId = recentJob?.scenario_id;
             latestResult = null;
             ResetResultPresentation();
-            if (recentJob != null && endpoints != null)
+            if (recentJob != null)
             {
-                SetActiveJob(EmbodiedLabJob.Restore(
-                    endpoints,
-                    recentJob.submission_id,
-                    recentJob.cancel_token));
+                if (TryRestoreJob(recentJob, out EmbodiedLabJob restoredJob, out string restoreError))
+                {
+                    SetActiveJob(restoredJob);
+                }
+                else
+                {
+                    status = $"Cloud: restore unavailable · {restoreError}";
+                }
             }
         }
 
@@ -1602,10 +1661,13 @@ namespace EnvForge.Navigation.Cloud
             }
 
             EnvForgeJobRecordDto selectedJob = jobHistoryStore.FindJob(job.submission_id) ?? job;
-            SetActiveJob(EmbodiedLabJob.Restore(
-                endpoints,
-                selectedJob.submission_id,
-                selectedJob.cancel_token));
+            if (!TryRestoreJob(selectedJob, out EmbodiedLabJob restoredJob, out string restoreError))
+            {
+                status = $"Cloud: selection unavailable · {restoreError}";
+                return;
+            }
+
+            SetActiveJob(restoredJob);
             activeScenarioId = selectedJob.scenario_id;
             latestResult = null;
             ResetResultPresentation();
@@ -1670,10 +1732,13 @@ namespace EnvForge.Navigation.Cloud
 
             try
             {
-                using EmbodiedLabJob job = EmbodiedLabJob.Restore(
-                    endpoints,
-                    requestedSubmissionId,
-                    record.cancel_token);
+                if (!TryRestoreJob(record, out EmbodiedLabJob restoredJob, out string restoreError))
+                {
+                    Debug.LogWarning($"Library refresh skipped for {Shorten(requestedSubmissionId, 18)}: {restoreError}");
+                    return false;
+                }
+
+                using EmbodiedLabJob job = restoredJob;
                 ResultDocument fetchedResult = await job.RefreshAsync(lifetimeCancellation.Token);
                 if (jobHistoryStore.FindJob(requestedSubmissionId) == null)
                 {
@@ -1765,8 +1830,7 @@ namespace EnvForge.Navigation.Cloud
                 ResultArtifacts artifacts = GetResultArtifacts();
                 string replay = artifacts?.ReplayBundle == null ? "replay missing" : "replay available";
                 string model = artifacts?.OnnxModel == null &&
-                    artifacts?.SentisModel == null &&
-                    artifacts?.Model == null
+                    artifacts?.SentisModel == null
                         ? "model missing"
                         : "model available";
                 return $"Cloud: {replay} · {model}";
@@ -2274,8 +2338,8 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.BeginVertical();
             GUILayout.Label("Workers", settingsLabelStyle);
             DrawIntField("parallel envs", ref nEnvsText, value => sceneBuilder.TrainingSettings.NEnvs = value, SettingsColumnLabelWidth);
-            DrawIntField("trainer CPUs", ref cpuCountText, value => sceneBuilder.TrainingSettings.CpuCount = value, SettingsColumnLabelWidth);
-            DrawIntField("torch threads", ref torchNumThreadsText, value => sceneBuilder.TrainingSettings.TorchNumThreads = value, SettingsColumnLabelWidth);
+            DrawOptionalIntField("trainer CPUs", ref cpuCountText, value => sceneBuilder.TrainingSettings.CpuCount = value, SettingsColumnLabelWidth);
+            DrawOptionalIntField("torch threads", ref torchNumThreadsText, value => sceneBuilder.TrainingSettings.TorchNumThreads = value, SettingsColumnLabelWidth);
             GUILayout.Space(8f);
             GUILayout.Label("PPO", settingsLabelStyle);
             DrawIntField("n steps", ref nStepsText, value => sceneBuilder.TrainingSettings.NSteps = value, SettingsColumnLabelWidth);
@@ -2325,6 +2389,25 @@ namespace EnvForge.Navigation.Cloud
             GUILayout.EndHorizontal();
         }
 
+        private void DrawOptionalIntField(string label, ref string text, Action<int?> applyValue, float labelWidth = SettingsLabelWidth)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, settingsLabelStyle, GUILayout.Width(labelWidth), GUILayout.Height(SettingsFieldHeight));
+            GUI.SetNextControlName(SettingsTextFieldFocusPrefix + label);
+            text = GUILayout.TextField(text, settingsTextFieldStyle, GUILayout.Height(SettingsFieldHeight));
+            RegisterTextInputFocus();
+            if (string.IsNullOrWhiteSpace(text) || string.Equals(text.Trim(), "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                applyValue(null);
+            }
+            else if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+            {
+                applyValue(value);
+            }
+
+            GUILayout.EndHorizontal();
+        }
+
         private void DrawStringField(string label, ref string text, float labelWidth = SettingsLabelWidth)
         {
             GUILayout.BeginHorizontal();
@@ -2367,8 +2450,8 @@ namespace EnvForge.Navigation.Cloud
             maxEpisodeStepsText = settings.MaxEpisodeSteps.ToString(CultureInfo.InvariantCulture);
             seedText = settings.Seed.ToString(CultureInfo.InvariantCulture);
             nEnvsText = settings.NEnvs.ToString(CultureInfo.InvariantCulture);
-            cpuCountText = settings.CpuCount.ToString(CultureInfo.InvariantCulture);
-            torchNumThreadsText = settings.TorchNumThreads.ToString(CultureInfo.InvariantCulture);
+            cpuCountText = settings.CpuCount?.ToString(CultureInfo.InvariantCulture) ?? "auto";
+            torchNumThreadsText = settings.TorchNumThreads?.ToString(CultureInfo.InvariantCulture) ?? "auto";
             nStepsText = settings.NSteps.ToString(CultureInfo.InvariantCulture);
             batchSizeText = settings.BatchSize.ToString(CultureInfo.InvariantCulture);
             cameraMountHeightText = settings.CameraMountHeightMeters.ToString("0.######", CultureInfo.InvariantCulture);
@@ -2468,7 +2551,10 @@ namespace EnvForge.Navigation.Cloud
                     return;
                 }
 
-                ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(manifestPath);
+                ReplayBundleManifest manifest = EmbodiedLabReplay.ReadManifest(
+                    manifestPath,
+                    latestJob.submission_id,
+                    latestJob.scenario_id);
                 ConfigureActiveReplayBundle(manifest, manifestPath);
                 activeReplayScenarioSource = ApplyReplayScenario(latestJob);
                 manifestReady = true;
@@ -2545,9 +2631,12 @@ namespace EnvForge.Navigation.Cloud
             string cpuSummary = training.CpuCount.HasValue && training.CpuCount.Value > 0
                 ? training.CpuCount.Value.ToString(CultureInfo.InvariantCulture)
                 : "job";
+            string torchSummary = training.TorchNumThreads.HasValue && training.TorchNumThreads.Value > 0
+                ? training.TorchNumThreads.Value.ToString(CultureInfo.InvariantCulture)
+                : "job";
             string algorithm = training.Algorithm.ToString().ToLowerInvariant();
             return $"{algorithm} · {FormatSteps(training.Timesteps)} · seed {training.Seed} · envs {training.NEnvs} · " +
-                   $"cpu {cpuSummary} · th {training.TorchNumThreads ?? 0} · n_steps {training.NSteps} · batch {training.BatchSize}";
+                   $"cpu {cpuSummary} · th {torchSummary} · n_steps {training.NSteps} · batch {training.BatchSize}";
         }
 
         private GUIStyle GetPresetButtonStyle(string presetName)

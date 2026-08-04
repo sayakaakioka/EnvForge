@@ -2,12 +2,13 @@
 
 ## 現在の状態
 
-EnvForge は `com.embodiedlab.unity` を利用しているが、Unity project は旧 SDK commit
-`b96a46779bef8ed24af77d9aecf49f94150d8afa` を固定している。
+EnvForge は `com.embodiedlab.unity` の main commit
+`abb976ea97b1010fb3a6dbfb177cefdde5aa90b6` を固定している。
 
-`EmbodiedLab.Unity` では、契約同期と tutorial 整理に続き、server-owned job lifecycle、
-artifact 検証、Replay 読み込み、ONNX / camera 境界を小さな公開 API として再設計する。
-この公開 API が main へ入った後、EnvForge を新 API 利用へ書き直す。
+server-owned job lifecycle、size / SHA-256 を含む artifact 検証、identity と chunk
+metadata を照合する Replay 読み込みへ移行済みである。Scenario builder は camera、
+action、reward、PPO、resource 値をすべて JSON に明記し、local inference は Scenario の
+observation / action 値と固定された policy mapping を使う。
 
 移行前の旧 API や重複実装を compatibility layer として残さない。過去の移行経緯は
 Git 履歴と pull request を参照する。
@@ -20,7 +21,7 @@ Git 履歴と pull request を参照する。
 - job submit、状態監視、明示的な再同期、cancel
 - artifact metadata、size、SHA-256 の検証と download
 - Replay Bundle manifest / chunk の逐次読み込み
-- ONNX metadata と observation / action contract の検証
+- Result 内の ONNX artifact metadata と size / SHA-256 の検証
 - Unity 2022.3.19f1 以降で利用できる package 境界
 
 EnvForge が持つ責務:
@@ -29,21 +30,28 @@ EnvForge が持つ責務:
 - Cloud / World / Replay / Library UI
 - ユーザー向け job と map の履歴
 - Replay の scene 表示と操作
-- navigation 固有の observation、action、local inference
+- navigation 固有の ONNX session 入出力、observation / action mapping、local inference
 - EnvForge 固有の保存先と画面遷移
 
-ONNX Runtime の native binary は特定 OS をプロダクト全体の対応範囲とみなさず、
-Windows x64、Ubuntu、macOS の各 target を package と build で個別に検証する。
+Cloud、Result、Replay の SDK workflow は Windows x64、Ubuntu x64、macOS を対象とする。
+同梱 native ONNX Runtime による local inference は現時点で Windows x64 のみを対象とし、
+Ubuntu と macOS は native integration を追加してから個別に検証する。
 
-## 実装順序
+## 到達済み
 
-1. EmbodiedLab で server-owned lifecycle と最終データ契約を確定する。
-2. `EmbodiedLab.Unity` の公開 API、検証上限、tutorial を確定する。
-3. EnvForge の package pin を確定済み SDK main commit へ更新する。
-4. `Assets/Scripts/Navigation/Cloud` の旧 lifecycle 呼び出しを新 API へ置き換える。
-5. EnvForge 内の重複 DTO、transport、artifact、Replay parse code を削除する。
-6. EnvForge 固有 UI、履歴、Replay 表示、local inference を SDK の結果へ接続する。
-7. Windows、Ubuntu、macOS の対象 build と Unity Editor で動作確認する。
+1. EmbodiedLab で server-owned lifecycle と最終データ契約を確定した。
+2. `EmbodiedLab.Unity` の artifact / Replay 検証と tutorial を確定した。
+3. EnvForge の package pin と canonical fixture を確定済み SDK main へ同期した。
+4. `Assets/Scripts/Navigation/Cloud` の restore、artifact、Replay 呼び出しを新 API へ置き換えた。
+5. 旧 artifact field、旧 Replay property、意味の違う action 解釈を削除した。
+6. Scenario の camera、action、reward、training 値を local runtime と inference へ接続した。
+
+## 次の検証
+
+1. Unity 6.3 LTS Editor と Windows x64 standalone の local inference を検証する。
+2. Ubuntu x64 と macOS は cloud / result / replay の package / application build を
+   対象環境で個別に検証する。
+3. Cloud の実ジョブで submit、monitor、verified download、Replay、local inference を目視確認する。
 
 ## 完了条件
 
