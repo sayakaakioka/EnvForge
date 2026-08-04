@@ -19,6 +19,11 @@ The Unity project pins a tested `EmbodiedLab.Unity` merge commit in
 Update the commit only after the SDK contract and transport checks pass and the
 EnvForge project resolves and compiles with the new revision.
 
+The current pin uses the first SDK integration. The next package update will
+adopt the server-owned lifecycle and artifact verification described in
+`docs/implementation/embodiedlab-unity-sdk-migration.md`; do not preserve the
+old lifecycle through a compatibility adapter.
+
 ## Unity Configuration
 
 Create an API settings asset in Unity:

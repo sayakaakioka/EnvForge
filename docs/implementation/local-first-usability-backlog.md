@@ -1,106 +1,105 @@
-# Local-first 操作性バックログ
+# Local-first active backlog
 
 ## 目的
 
-EnvForge の local-first navigation editor を実際に使いながら見つかった、
-細かい違和感、操作しづらさ、調査したい点を一箇所に集約する。
+この文書には未完了のユーザー課題だけを残す。完了済み項目と実装経緯は Git 履歴と
+pull request を参照する。
 
-この文書は、すぐに実装へ入るための仕様書ではなく、ユーザー観察ログと
-実装 TODO の間に置くバックログである。各項目は、症状、期待、次の確認を
-分けて記録し、後で優先順位を決めて実装タスクへ切り出す。
+SDK 公開 API と EnvForge 移行は
+`docs/implementation/embodiedlab-unity-sdk-migration.md` を正本とする。
 
-## 運用方針
+## Critical
 
-- 実行中に見つけた違和感は、まずこの文書に追加する。
-- 実装に入る前に、再現条件、期待する挙動、影響範囲を確認する。
-- クラウドリソース削除や接続設定変更のような破壊的・環境依存の作業は、
-  別途チェックリストを作ってから実行する。
-- Unity 起動中やユーザーが目視確認中の場合、コード変更や Unity 起動を伴う検証は
-  明示的な許可があるまで行わない。
+### UX-031 / PHYS-002: Run AI episode lifecycle
 
-## バックログ
+- Replay と Run AI を排他的にする。
+- Run AI 開始時は replay の途中状態を引き継がず、学習時と同じ規則で start pose を選ぶ。
+- goal 到達と wall collision を episode terminal event として扱い、同じ model で次の start へ進む。
+- 完了確認は、連続5回以上で開始位置が変わり、goal / collision 後に再開し、壁に接触したまま
+  滑り続けないことを Unity 上で目視する。
 
-| ID | 分類 | 症状・観察 | 期待 | 優先度 | 状態 | 次の確認 |
-| --- | --- | --- | --- | --- | --- | --- |
-| UX-001 | マップ視点 | マップを真上から見たい。 | 編集時に、現在の斜め view と top-down view を切り替えて位置関係を把握できる。 | High | Done | ユーザー目視で `Top` / `Angle` 切り替えと `Place Wall` ボタン表示を確認済み。 |
-| UX-002 | 壁編集 | 壁をコピペできない。 | 既存の壁を複製し、位置や長さだけ微調整できる。 | Medium | New | 複製ショートカット、ボタン、コンテキスト操作のどれが自然か確認する。 |
-| UX-003 | 壁ハンドル | 壁の拡大マーカーと縮小マーカーらしき表示の違いが分かりづらい。 | マーカーごとの操作結果が見た目と操作感で分かる。 | Medium | Done | 左右の端点はいずれも、反対側を固定して長さを変える同じ操作だった。選択中の壁は矩形アウトラインで実形状を示し、リサイズ用マーカーは実端点より内側に置いて外壁近くでも操作しやすくした。ユーザー壁の配置 clamp は外壁の内側面まで寄せられるようにし、直角に接続したいときの不要な隙間を避ける。 |
-| UX-004 | 壁配置 | `Place Wall` で壁を設置すると既存の壁に重なり、操作しづらい。 | 新規壁が既存壁を邪魔しない位置に置かれる、または配置直後に動かしやすい。 | High | Done | 新規壁の中心候補を周辺へ探索し、既存ユーザー壁と重ならない位置を優先して配置するようにした。配置後は新規壁を選択状態にする。 |
-| UX-005 | 壁選択 | 壁が近い間隔で設置されていると、意図した壁を選択状態にしづらい。 | 密集した壁でも狙った壁を安定して選択できる。 | High | New | クリック判定、選択候補の循環、選択リスト、ハンドル表示の候補を比較する。 |
-| UX-006 | 設定入力フォーカス | 右上ウィンドウの `Settings` で値を編集するとき、カーソルキーを使うとマップが動く。 | 入力欄にフォーカスがある間は、カーソルキーがマップ操作に伝播しない。 | High | Done | Cloud settings の text field focus を camera controller が見るようにし、Settings 入力中は pan 入力を抑制する。 |
-| UX-007 | WebSocket 表示安定性 | WebSocket で情報を取るタイミングで画面がちらつくように見える。 | 状態更新時もパネルや画面表示が安定する。 | Medium | Needs investigation | 更新頻度、再描画範囲、パネル開閉状態、job history 保存タイミングを確認する。 |
-| UX-008 | マップ保存・読み込み | 作成したマップを保存して、後から開き直す導線がほしい。 | 壁、平面サイズ、スタート、ゴール、主要設定を保存し、後で同じマップを復元できる。 | High | Done | World 詳細パネルに `Save Map` と Saved maps 一覧を追加し、名前付き map history から Load / Delete できるようにした。互換用に `latest-map.json` も更新するが、通常のロード導線は履歴一覧へ寄せる。 |
-| UX-009 | 新規マップ・リセット | 現在のマップを破棄して、新規マップを作る導線がない。 | 新規作成またはリセット操作で、平面、境界壁、追加壁、スタート、ゴール、主要設定を既定状態に戻せる。 | High | New | 保存済みマップやジョブ投入済み設定との関係、確認ダイアログ、リセット対象の範囲を整理する。 |
-| UX-010 | 表示専用ラベル | 右上ウィンドウの表示専用ラベルにマウスを乗せると色が変わり、操作できる要素のように見える。 | 表示専用ラベルは hover しても色が変わらず、ボタンや入力欄と見分けがつく。 | Low | Done | Cloud / World panel の表示専用 label style で hover / active / focused state を通常表示に固定し、読み取り専用項目がボタンのように見えないようにした。 |
-| UX-011 | リプレイ操作 | Replay の前後 step ボタンが縦線つきアイコンで、先頭・末尾へ移動する操作に見える。 | 1 step 前後移動だと分かるよう、現在のアイコンから縦線だけを外す。長い Replay Bundle の移動は、まず既存の episode 前後移動で足りるか確認する。 | Low | Done | `NavigationReplayPlayer` の Previous / Next icon drawing から縦線だけを削除し、tooltip と 1 step 挙動を維持した。 |
-| UX-012 | リプレイ視点 | リプレイ時にも上からの視点を選べるようにしたい。 | Replay 再生中も、斜め view と top-down view を切り替えて軌跡、壁、ゴールとの位置関係を確認できる。 | Medium | Done | Replay compact / details overlay に `Top` / `Angle` を追加し、再生中も既存の camera controller を切り替えられるようにした。 |
-| UX-013 | 成果物選択 | マップ、学習結果、学習済モデルを選択してダウンロード・ロードできる導線がない。別マップを手動ロードした後も、RunAI がどのジョブのモデルを使っているか分かりづらい。 | 保存済みマップ、Result Bundle / Replay Bundle、`policy.onnx` を一覧から選び、必要なものをダウンロードまたはローカルロードできる。現在表示中のマップ由来と、RunAI が使うモデル由来が別々に分かる。 | High | In progress | Cloud panel の `Library` で過去ジョブを `Select` / `Replay` / `Fetch` / `Remove` でき、`Refresh History` で古い status / artifact metadata を取り直せるようにした。World detail では map name 付き保存、履歴一覧からの Load / Delete、latest map の明示ロードを扱える。Job details の Runtime に `Map:`、`Model:`、`Camera:` を表示し、手動ロードした map、選択中 job model、RunAI の現在カメラ高と学習時 camera height range のずれを見えるようにした。検索/絞り込み、任意ファイル picker は次段階で整理する。 |
-| UX-014 | 壁選択解除 | 最後に選択した壁の黄色いマーカーが出っぱなしになる。 | 何もない床をクリックしたら壁の選択状態が解除され、黄色いマーカーがどの壁にも出ない。 | Medium | Done | 壁本体 / リサイズハンドルに当たらず、床面に当たった左クリックでは `selectedWallIndex` を解除する。World panel 上のクリックは従来通り編集解除に使わない。 |
-| UX-015 | スマホ向け操作 | 今後はスマホでの利用がメインターゲットになる予定で、キーボードショートカット前提の操作は合わない。 | キーボードショートカットなしでも快適に動く UI を重視し、不要なショートカットは削除する。 | High | In progress | Cloud / World / Replay panel の表示切り替えや詳細閉じのキーボードショートカットを削除した。選択中壁を右クリックなしで回転できる `Rot` ボタンを World compact に追加し、90度固定ではなく15度刻みに変更した。World detail には角度スライダー、`-15` / `+15`、角度入力を追加した。Camera pan と live robot control のキーボード入力は、スマホ向け代替 UI を入れる段階で整理する。 |
-| UX-016 | スマホ向け全面見直し | スマホ利用を前提にすると、現在のデスクトップ寄りの UI 全体が使いづらくなる可能性がある。 | スマホでの利用を主対象として、画面構成、パネル配置、タッチ操作、情報量、主要導線を全面的に見直す。 | High | In progress | Cloud panel を `Job` / `Library` / `Settings` に分け、主要操作を同じ action bar に寄せた。World compact の主要操作を短いラベルへ寄せ、壁角度はボタンとスライダー/入力で調整できるようにした。Replay details は compact と同じ幅・操作列に揃えた。スマホ幅での最終レイアウト、タッチ専用操作、全パネル横断の情報量整理は継続する。 |
-| UX-017 | ユーザー表示と開発ログの分離 | ユーザーに見せるべき情報と、開発時のログとしてフロート表示すればよい情報が混ざっている可能性がある。Debug 情報をパネル内の詳細として出すと、ユーザー向け状態表示と開発者向け診断が混ざってしまう。 | ユーザー向けの必要情報と開発用のデバッグ情報を整理して切り分ける。開発用 Debug 情報はパネル内ではなく、Unity Editor で Play 中の画面に背景透過のオーバーレイとして重ねて表示する。バイナリ配布時には、この Debug overlay 機能ごと無効化できる。 | High | In progress | Job details から Debug 表示ボタンを外し、stream / fetch 診断は `#if UNITY_EDITOR` の Editor-only 透過 overlay に分離した。通常 UI にはユーザー向け状態だけを残す。production 表示のさらなる整理と、警告再現時の目視確認は継続する。 |
-| UX-018 | 履歴ライブラリ | 過去に作成したマップ、ジョブ設定、結果、ログ、推論モデルを、ユーザーが一覧から選んで再利用する仕組みがない。 | 過去のマップ、ジョブ設定、結果、ログ、推論モデルを履歴ライブラリとして整理し、ユーザーが選んでロード、再実行、比較、削除できる。 | High | In progress | Cloud panel に `Library` を追加し、`job-history.json` の過去ジョブを一覧から `Select` / `Replay` / `Fetch` / `Remove` / `Refresh History` できるようにした。Job Library の表示順は、選択中ジョブを先頭へ特別扱いせず、素直に `submitted_at_utc` の新しい順で並べる。Settings detail で `settings name` を入力し、ジョブ投入時に履歴へ `settings_name` として保存する。Library detail 上部の履歴要約や map 案内は外し、ジョブ一覧と選択中ジョブ名の編集へ集中させた。World detail には map name 付き map 履歴を追加し、保存済み map を一覧から Load / Delete できる。比較、ジョブ設定の再実行導線、検索/絞り込みは未実装。 |
-| UX-019 | ジョブパネル表示 | Job の `TRAIN` が 2 行表示になり、上下の文字が切れている。 | `TRAIN` の表示内容が複数行になっても文字が切れず、現在ジョブの要約として読みやすく表示される。 | Medium | Done | HUD の `TRAIN` は `ppo · steps · seed · envs` の短い要約にし、CPU / torch / PPO 詳細は Job details 側の意味別項目へ移した。 |
-| UX-020 | ジョブ詳細の情報整理 | Job details の `Trainer` と `Settings` の意味が重複していて、どちらが何を示すのか分かりづらい。 | 現在ジョブの情報を、意味が重ならない項目として読みやすく整理する。 | Medium | Done | `Trainer` / `Settings` をやめ、`Scenario`、`Training`、`Resources`、`PPO`、`Sensor` に分けた。 |
-| UX-021 | リプレイ・成果物状態の表示文言 | `Loaded Replay` の下に `Replay: none`、`Artifacts: replay ready · model ready`、`History: ... replay - · model -`、`Inference off` が並び、クラウド上の artifact、ローカル保存状態、現在ロード状態、AI 実行状態が混ざって見える。 | Replay、クラウド成果物、ローカル保存、AI 実行状態がそれぞれ何を意味するか直感的に分かる。 | Medium | Done | Runtime 表示を `Replay: not loaded`、`Cloud: replay/model available`、`Local: replay/model missing`、`AI: off` / `AI: running` へ整理し、`ready` と `Inference` をユーザー向け表示から外した。ジョブ完了前は cloud artifact を `waiting` と表示し、running 中に `available` と誤表示しないようにした。 |
-| UX-022 | パネル操作の一貫性 | 右上の Cloud panel などで、compact 表示と detail 表示のボタン種類は同じはずなのに、並びや大きさが変わって分かりづらい。他のパネルでも同様の違和感がある。 | compact / detail のどちらでも、同じ操作は同じ順序、同じラベル、近いサイズ感で表示され、パネルを開閉しても操作位置の予測が外れない。 | Medium | In progress | Cloud panel は compact 本体サイズを保ったまま、`Job` / `Library` / `Settings` の detail 窓だけを追加表示する構造にした。操作列は `Replay` / `Submit` / `Download` / `Run AI`、`Job` / `Library` / `Settings` の共通 action bar にした。World panel は compact 側に壁操作を集約し、Replay details は compact と同じ幅・同じ主要ボタン列に揃えた。全パネル横断の最終統一は次段階で確認する。 |
-| UX-023 | World 詳細の役割整理 | 左上 World panel の detail の中に壁設置関係の操作があり、detail で確認・設定したい内容と壁編集操作が混ざっている。 | World detail は床サイズ、マップ保存/読み込み、開始/ゴールなどの詳細設定に集中し、壁設置や壁編集は compact の主要操作またはマップ上の直接操作に寄せる。 | Medium | Done | World detail から `Wall` セクション、`Place Wall`、`Undo`、`Clear` を外し、床、Map、Start / Goal の詳細設定に集中させた。 |
-| UX-024 | 壁削除 | 選択中の壁を個別に消す手段がない。 | 選択中の壁だけを削除でき、誤って別の壁や全体を消さない。 | Medium | Done | World compact panel に選択中だけ有効な `Delete` を追加し、選択中の壁を個別に削除できるようにした。 |
-| UX-025 | パネルスクロールの入力遮断 | detail 表示をスクロールしていると、背後のマップまでズームされてしまう。 | UI パネル上のスクロール、ドラッグ、ホイール操作はパネルにだけ効き、背後のマップ操作に伝播しない。 | High | Done | Cloud / World / Replay panel がポインタ上かどうかを公開し、camera controller が UI 上の pan / zoom 入力を無視するようにした。World editor も Cloud / Replay panel 上のクリックを壁選択や解除として扱わない。さらにスマホ前提ではホイール操作自体が不要なため、マップの mouse wheel zoom を廃止した。 |
-| UX-026 | 壁配置時の保護領域 | 壁を適当に設置し続けるとロボットに重なり、ロボットが物理的に跳ねる。 | 新規壁は既存壁だけでなく、ロボット開始位置とゴール周辺も避けて配置される。 | High | Done | 新規壁の open-position 探索で、ロボット現在位置 / start pose と goal 周辺を保護領域として扱い、壁候補が重ならないようにした。移動 / 回転 / リサイズでも同じ保護判定を通し、編集操作でロボットやゴールへ重ねられないようにした。 |
-| UX-027 | スマホ向けポインタ操作 | 壁回転が右クリック、マップ拡大縮小が mouse wheel など、スマホで使えないポインタ操作に依存している。`Rot` ボタンという発想自体はありだが、スマホ向けの最終 UI としてこのボタンを残したいかは疑問がある。`Rot` ボタンだけでは、斜め壁や微調整を作りたいときに足りない。 | 壁回転、拡大縮小、pan などの主要操作を、スマホでも使えるボタン、ハンドル、スライダー、ピンチ/ドラッグ操作に置き換える。壁の角度は90度単位だけでなく、必要に応じて柔軟に調整できる。 | High | In progress | 壁の右クリック回転は削除し、World compact の `Rot`、World detail の角度スライダー、`-15` / `+15`、角度入力へ寄せた。`Rot` は暫定的な操作としては有効だが、スマホ向け UI ではラベル、押しやすさ、誤操作、角度調整との役割分担を確認し、残すか置き換えるか判断する。mouse wheel zoom は廃止済みなので、必要なら `Fit` / `Zoom +` / `Zoom -` ボタンやピンチ操作を追加する。 |
-| UX-028 | UI 入力遮断の共通化 | Cloud / World / Replay panel が個別の static flag で入力遮断しており、IMGUI の更新順によって前フレームの hit 判定を参照する余地がある。 | すべての UI panel の現在 rect を共通管理し、mouse / touch 位置から即時 hit test して world / camera 操作への入力貫通を防ぐ。 | Medium | Done | `NavigationInputBlocker` を追加し、Cloud / World / Replay の panel rect を共通 registry に登録する。旧 `IsPointerOverPanel` flags は削除し、World editing と camera pan は現在の mouse 位置を registry に照会して UI 上の入力を world / camera 操作へ渡さない。 |
-| UX-029 | 履歴の削除・整理 | 保存してあるマップや結果が増えたとき、不要な履歴をユーザーが選んで整理しづらい。`Keep Shown` のように「表示中の最新N件だけ残す」操作は意図と違い、何が消えるのか分かりにくい。履歴をひとつずつ削除していると `ArgumentOutOfRangeException: Index was out of range` が出る。 | 保存済みマップ、ジョブ結果、Replay / model などの履歴から、ユーザーが不要な項目を個別に選択し、確認付きで削除できる。表示件数の変更は一覧の見え方だけに留め、削除や保持数の変更とは分ける。削除後も選択中 index、表示件数、scroll 位置、active job が安全に更新され、連続削除しても例外が出ない。 | High | In progress | `Keep Shown` と `Show 10` 系の表示件数操作を削除し、スクロール一覧と個別 Remove / Confirm に寄せた。ジョブ履歴 / ローカル artifact は各行の `Remove` / `Confirm` で削除し、World detail の map 履歴にも個別 Delete / Confirm を持たせた。クラウド成果物削除は破壊的なので、引き続き `docs/implementation/cloud-result-retention.md` と照合する別導線として扱う。 |
-| UX-030 | リプレイパネルのボタン配置 | 右下の Replay panel では `Top` と `Angle` が別ボタンになっているが、左上 panel のように1つのボタンで切り替える方が分かりやすい。さらに `Angle` の文字がはみ出し、`Detail` は `tail` しか見えていない。 | Replay panel でも視点切り替えは1つの toggle button に統一し、`Angle` / `Detail` などの表示テキストがボタン内に収まる。 | Medium | Done | Replay compact / details の視点切り替えを `NextCameraViewLabel` の1ボタンに統一した。compact 側の `Details` は幅不足を避けるため `More` にした。 |
-| UX-031 | リプレイと AI モードの排他・RunAI 開始位置 | Replay と AI モードが同時にオンになっているように見える画面状態を作れて、どちらが有効なのか分からない。Replay 中に `Run AI` を押すと、Replay の最後にいた位置や途中状態からそのまま推論モードに入ってしまう。さらに Run AI モードのロボット開始位置がランダムではなく固定されているように見える。ユーザー目視では、前回修正後も Run AI の開始位置が毎回同じに見えていたが、最新確認では初期位置が変わらない問題は解決しているように見える。一方で、RunAI 中にロボットが壁へぶつかると RunAI モードが勝手に終わっていた。Goal 到達時もそこで止まり、次の試行へ入らない。さらに、壁へぶつかっても episode failure / 再スタートにならず、壁に接触したままジリジリ動くケースが多く観察されている。 | Replay 再生と AI 推論モードは排他的に扱われ、片方を有効にしたらもう片方は停止または無効化される。`Run AI` を開始するときは Replay の途中状態や最後の frame を引き継がず、学習時と同じ前提に近づくよう開始位置をランダムに設定し直す。Run AI を連続実行したとき、実際の Transform / Rigidbody / observation 上の開始座標が毎回変わり、UI 表示だけでなくロボットの見た目でも違いが分かる。Goal 到達時と壁衝突時は、現在選択中 job の同じモデルで、次のランダム start へ自動再開する。 | Critical | In progress | `Run AI` 開始時に replay control を解放してからランダム pose を選び、`NavigationModelInferenceController` が Transform / Rigidbody / live reset pose へ同じ pose を適用する。推論中の wall / goal event は `NavigationEpisodeEventHub` の override sink で推論コントローラが受け取り、通常 LiveController の `ResetPose()` へ流れないようにした。goal reached と wall collision は Cloud panel 側で一度停止してから、現在選択中 job の `policy.onnx` と新しいランダム start で自動再開する。修正完了条件は、Run AI を5回以上連続で開始して開始位置が変わること、Goal 到達後と壁衝突後に次の試行へ入ること、壁に接触したままジリジリ動き続けないことを Unity 目視で確認すること。 |
-| UX-040 | ゴール位置のランダム化 | 学習や RunAI で開始位置はランダム化できるが、ゴール位置は固定のままになっている。固定ゴールだけだと、特定の配置に過適合したり、RunAI の確認で同じ経路だけを見続けたりしやすい。 | 学習時と RunAI 時の両方で、必要に応じてゴール位置もランダム化できる。ランダムゴールは壁、外壁、ロボット開始位置、安全距離を避け、Scenario Bundle / 学習環境 / EnvForge runtime で同じ条件として扱われる。RunAI では開始位置とゴール位置の組み合わせが試行ごとに変わり、現在ゴール位置やランダム設定が UI で確認できる。 | High | New | Scenario Bundle に goal randomization の有効/無効、範囲、安全距離、seed / sampling rule をどう表現するか検討する。EnvForge 側は World UI、Job Details Runtime、Replay / RunAI 表示で、現在の goal source と位置を確認できるようにする。EmbodiedLab 側の学習環境と条件を揃える必要があるため、実装前に契約を確認する。 |
-| UX-032 | 壁の直角接続 | 二枚の壁を直角に置きたいとき、壁同士をぴったりくっつけられない。ロボットやゴールとの排他処理、または壁同士の保護判定が働いて隙間ができる。 | 壁同士を直角に接続したい場合は、ロボットやゴールなど本当に保護すべき領域を避けつつ、壁の端点同士や壁端と壁側面を隙間なく接続できる。直角以外の接続や微調整もできるよう、回転角度は90度固定に閉じない。 | High | In progress | 新規壁の自動配置では既存壁との重なり回避を維持しつつ、移動 / 回転 / リサイズでは壁同士の clearance を外して接触を許可した。選択壁を90度単位で回す `Rot` ボタンも追加したが、角度スライダーや回転ハンドルで柔軟に角度調整できる導線が必要。端点 snap / 側面 snap の吸着補助は次段階で整理する。 |
-| UX-033 | 接続エラーの開発用表示 | EnvForge から投げたジョブは Job details から見えているが、`Last stream error` が Stream 情報の下に表示される。内容は起動時の警告に見え、通常の Job 詳細に常時出ると現在ジョブの状態と混ざって見える。さらに `Unable to connect to the remote server` のような fetch 失敗時に、`History Path` だけが見えているとローカル履歴ファイルとクラウド API 接続先を混同しやすい。完了済みジョブで RunAI モードにすると、`stream error: none` / `fetch error: none` しかないのに Editor Debug が出て、エラー画面に見えていた。ジョブ履歴の `Fetch` でも HTTP fetch ではなく stream 接続が始まり、`Stream error: Unable to connect to the remote server` が出る。 | 起動時警告や開発者向けの stream / fetch 接続診断は Job details の通常情報から分離し、Unity Editor で Play 中の画面に背景透過の Debug overlay として表示する。fetch 失敗時は `History Path` ではなく、API Base URL、Fetch URL、対象 submission id、最後の接続失敗理由、次回 retry 時刻が分かる。stream / fetch error がない通常の RunAI では、エラー用 Debug overlay を出さない。履歴の `Fetch` は HTTP fetch だけを行い、running job 監視用の stream は開始しない。バイナリ配布時には Debug overlay 自体をビルドから外す、または確実に無効化する。 | Medium | In progress | Job details の Debug ボタンを外し、stream / fetch 診断は `#if UNITY_EDITOR` の Editor-only overlay に分離した。Overlay は左上から横幅を広く使う透過 HUD にし、スクロールバーを使わず、Status、Submission、API Base、Fetch URL、Stream、Stream error、Fetch error、Fetch failures / retry、Runtime start、Replay / AI を色付きで表示する。`History Path` は Debug HUD から外し、URL 表示は通常エラー用の URL redaction を通さず実接続先が見えるようにする。Debug overlay の表示条件は stream/fetch error または fetch failure がある場合だけに戻し、RunAI 実行中というだけでは出さない。Library の `Fetch` は `Select` 後に `FetchLatestResult("library")` だけを実行し、`StartResultStream()` は呼ばない。警告再現時の目視確認が残るため Done にはしない。 |
-| UX-034 | リプレイ詳細のボタン配置 | Replay 詳細表示のボタン配置やサイズが崩れていて、操作のまとまり、順序、押せる範囲が分かりづらい。簡易表示と詳細表示でパネル幅やボタンの大きさも揃っておらず、詳細ログを見るだけで操作 UI が別物に見える。`Compact` ボタンが2行表示になってしまっている。左上 World detail を開いたまま Replay をロードすると、右下 Replay UI が出ず、Replay 状態と表示が食い違う。 | Replay 詳細表示でも、compact 表示と同じ主要操作が同じ順序・同じ幅・同じボタンサイズで並び、文字切れや不自然な余白がなく、スマホ前提でも誤操作しにくい。Replay をロードしたら、World detail の有無にかかわらず Replay compact UI が見える。詳細ログは操作ボタン列を変形させず、簡易表示と同じ基準幅の外側または下側に追加表示する。 | High | In progress | Replay details の compact 戻りボタンを `Less` に短縮し、Replay button style は折り返さない設定にした。Replay overlay が World detail の open 状態だけで非表示にならないようにした。詳細表示でも compact と同じ幅・同じ主要ボタン列を維持する。Unity 目視で文字切れ、押しやすさ、World detail 表示中に Replay UI が出ることを確認する。 |
-| UX-035 | 履歴の名前付け | ジョブやマップの履歴が ID や自動生成ファイル名中心で表示され、あとから見たときに何の実験・どのマップだったか分かりづらい。 | ジョブ履歴とマップ履歴にユーザーが分かる名前を付けられる。保存時または履歴上で名前を編集でき、一覧では名前を主表示、ID や日時は補助情報として表示する。 | High | In progress | job history DTO に `display_name` / `settings_name` / `note` を追加し、Settings detail でジョブ設定名、Library detail 上部で選択中ジョブの `Name` を編集して保存できるようにした。map history は `map name` を保存時の表示名として持つ。既存履歴は ID やファイル名から暫定名を作る。履歴上で既存 map 名を直接 rename する導線は未実装。 |
-| UX-036 | 履歴表示件数コントロール | Library / 履歴パネルの `Show 10` 表示は、現在の UI では操作価値が低く、常時見えると主要操作より目立つ。履歴は個別 Delete / Confirm で整理できるため、表示件数だけを前面に出す必要性が薄い。 | 履歴パネルから `Show 10` のような表示件数コントロールを外す、または通常時は隠し、一覧は画面サイズに応じて自然にスクロール表示する。表示件数制限が必要な場合も、ユーザーの主要操作ではなく設定や内部制御として扱う。 | Medium | Done | Job Library の `Show 10` を削除し、保存済みジョブは scroll view 内で全件表示する。map history も表示件数切り替え UI は置かず、World detail の scroll view に任せる。 |
-| UX-037 | ジョブ履歴の状態更新 | EnvForge の履歴にあるジョブ情報が古いまま残り、実際には running / completed になっているジョブが `queued` のまま表示される。現在状態と履歴表示がずれると、どのジョブがまだ動いているのか分からなくなる。 | 履歴一覧のジョブは、表示時または明示的な更新操作で最新の Result Document を取得し、status、progress、summary、artifact metadata を更新できる。古い履歴値を表示する場合は、最終更新時刻や stale 表示で分かるようにする。 | High | In progress | Library に `Refresh History` を追加し、各 job の Result Document を取り直して status、progress、artifact metadata、更新時刻を保存する。Result refresh では既存履歴の順序を保ち、選択中ジョブの場合だけ現在表示にも反映する。自動 refresh の間隔や running / queued の優先更新は次段階で調整する。 |
-| UX-038 | マップ履歴管理 | 保存できるマップが実質的に 1 つだけに見える、または `latest-map.json` の単一保存導線が前面に出ていて、過去に作ったマップをジョブ履歴のように管理しづらい。 | マップもジョブ履歴と同じように、複数保存、一覧表示、選択ロード、名前付け、削除、最終更新時刻の確認ができる。現在どのマップを編集中か、ジョブ投入に使うマップがどれかも分かる。 | High | In progress | World detail に `map name` を追加し、保存時は `latest-map.json` に加えて名前付き map history に積む。`Load Latest` は削除し、ロードは Saved maps 一覧から選ぶ導線へ寄せた。Library と World panel のどちらを最終的な管理場所にするかはスマホ UI 全体で整理する。 |
-| UX-039 | テキスト入力中のキー入力遮断 | Library details の `Name` 欄など、テキスト入力中にカーソルキーを押すと背後のマップも移動する。以前 Settings 入力欄でも同じ現象があり、入力欄を追加するたびに個別対応しているため再発している。 | どのパネル、どの入力欄でも、text field / text area / numeric field にフォーカスがある間は、矢印キー、Backspace、Delete、Enter、文字入力などが world camera、wall editor、shortcut、live control に伝播しない。今後 UI パーツを追加しても、共通 helper を使う限り再発しない。 | High | In progress | `NavigationInputBlocker` を拡張し、pointer hit だけでなく keyboard/text focus を一元管理する。Cloud settings、Library job name、World map name、start/goal、wall angle の text field は共通登録を通し、camera controller、world editor、live controller は個別 panel flag ではなく `NavigationInputBlocker.ShouldBlockWorldKeyboardInput` を見るようにした。完了条件は、Settings、Library job name、job settings name、World map name、start/goal、wall angle の全入力欄でカーソルキーを押してもマップが動かないことを Unity 目視で確認すること。 |
-| VIS-001 | 壁の見え方の一貫性 | 壁の見え方にばらつきがあり、角度や厚さが同じに見えない。 | 同じ設定の壁は、角度、厚さ、端点、影、選択状態にかかわらず一貫した形に見える。 | Medium | Done | 壁の影を無効化して角度ごとの見え方の差を抑えた。選択中の表示は中心線ではなく壁の矩形アウトラインにし、回転時も実際の厚みと向きが直感的に分かるようにした。さらに `Top` view は perspective ではなく orthographic に切り替え、壁を上下に動かしたときに板が倒れるように見える投影歪みを避ける。 |
-| VIS-002 | アングル視点の壁表示 | 真上視点の壁表示は改善したが、アングル視点では壁の大きさや厚みがまだおかしく見える。 | アングル視点でも壁の高さ、厚み、奥行き、端点が自然に見え、編集時の実寸感と一致する。 | Medium | New | perspective camera、field of view、wall mesh scale、material / outline、選択中 overlay の描画位置、外壁との見え方を切り分ける。 |
-| CLOUD-001 | クラウド警告 | Unity が `Result fetch failed ... Cannot resolve destination host ...` 警告を吐き続け、再起動しても消えない。 | 無効な接続先や不要な polling がある場合、警告が出続けない。 | High | Done | 同じ result fetch error は繰り返し Warning に出さず、宛先解決失敗時は polling 間隔を伸ばすようにした。missing / deleted 系の結果取得失敗では stream を止める。 |
-| CLOUD-002 | WebSocket ライフサイクル | ジョブ終了後やクラウド側データ削除後に WebSocket が回り続け、`Result stream failed: The remote party closed the WebSocket connection without completing the close handshake.` 警告が出る。 | ジョブ完了、キャンセル、削除済み、結果取得不能の状態では WebSocket を適切に止め、想定内の close / missing result を警告として出し続けない。 | High | Done | terminal status を `completed` / `failed` / `cancelled` / `deleted` / `missing` として扱い、stream を明示停止する。close handshake なしの切断は想定内 close として処理し、Warning spam にしない。 |
-| ARCH-001 | クラウド連携の再利用化 | EnvForge の中に、ジョブ投入、状況取得、結果回収、履歴保存、artifact download、stream / fetch 診断がまとまって入り込んでいる。似たような Unity プロジェクトでも使いたい場合、EnvForge 固有 UI や navigation 固有の DTO に強く依存していると切り出しづらい。 | ジョブ投入、状況取得、結果回収、artifact download の核を EnvForge 固有 UI から切り離し、他の Unity プロジェクトでも使える package として配布できる。EnvForge 側はその package を使う一実装になり、プロジェクト固有の scenario、履歴、replay、model 表示だけを持つ。 | High | In progress | `EmbodiedLab.Unity` に contract、submit、result fetch / stream、cancel、artifact download、Replay parse を移し、EnvForge は SDK 利用側へ移行した。ユーザ向け job history は EnvForge 固有 UI 状態を含むため EnvForge に残す。複数フロントエンドから共通履歴 API の要求が出るまでは SDK へ抽象化しない。SDK 側の通信サイズ上限と非 loopback 接続の TLS 強制は別 PR の保留事項とする。 |
-| OPS-001 | クラウド整理 | クラウド側の不要なものを消して整理したい。 | 残す成果物と消すリソースを明確にしたうえで、安全に削除できる。 | Medium | Done | 2026-07-20 に保持台帳、Firestore、GCS、Cloud Run、Artifact Registry、ローカル job history を照合した。学習結果9件はすべてローカル履歴から参照されているため保持し、対応 image が存在しない無トラフィックの古い API revision 2件だけを削除した。現行 revision と直前 rollback revision は保持した。 |
-| MAINT-001 | コード保守性 | コードが増えてきて、人間が中身を追ったり確認したりしづらくなる可能性がある。 | 定期的にコードをリファクタリングし、責務、命名、重複を整理して、人間が追いやすく冗長なコードが少ない状態を保つ。 | Medium | New | 機能変更を目的にせず、読みやすさ、責務分離、重複削除、古い暫定コード削除、テストや検証のしやすさを観点に点検する。 |
-| QA-001 | カメラ高さ確認 | カメラの高さが設定変更や runtime 状態に応じてちゃんと変わっているか確認したい。 | カメラ高さの設定値、実際の transform、見た目の変化が一致していると確認できる。 | Medium | Done | ユーザー目視で概ね問題ないことを確認済み。設定値、range、Replay 表示は既存 UI に表示される。 |
-| QA-002 | 最大エピソード長の定義 | `max episode` の定義が期待と合っているか確認したい。 | UI 表示、Scenario Bundle、学習設定、Replay / 結果表示で `max episode` が同じ意味として扱われる。 | Medium | Done | UI ラベルを `max steps/ep` に変更し、Scenario Bundle の `training.max_episode_steps` と同じ意味だと分かるようにした。 |
-| PHYS-001 | ロボットと壁の衝突 | ロボットと壁の衝突判定が甘いように見える。 | 見た目上ロボットが壁に接触した、または壁へ入り込んだ状態と、collision / failure 判定が自然に一致する。 | High | Done | `robot.radius` を Scenario Bundle の正本にし、EnvForge の collider と EmbodiedLab の obstacle 膨張 collision 判定を同じ値に揃える。 |
-| PHYS-002 | 推論時の壁衝突 termination | RunAI の観察中、ロボットが壁にしっかりぶつかりながら、斜めに設置した壁の角を触るようにして壁沿いに動く様子が見えた。壁衝突後に停止・離脱せず、壁や角へ押し付けられたまま滑っているように見える。もしかすると物理摩擦の問題ではなく、推論時には壁にぶつかっても学習環境のような episode termination / failure になっていないことが主因かもしれない。壁にぶつかってもジリジリ動いているケースが多数観察されている。 | ロボットが壁へ明確に接触した状態では、学習環境側の collision termination / failure と EnvForge の RunAI 挙動が一致する。壁衝突後に同じ episode のまま壁に沿って不自然に滑り続けたり、角をなぞるように押し付け移動したりしない。 | High | In progress | RunAI 中の wall collision event を `NavigationModelInferenceController` から Cloud panel へ通知し、`Goal reached` と同じく現在の推論を停止して、同じ `policy.onnx` と新しいランダム start で自動再開するようにした。複数の衝突通知が同時に来ても再起動は1回にまとめる。Unity 目視で、壁衝突後に同じ episode のまま壁沿いに滑り続けないことを確認する。Rigidbody / friction / physics material の調整は、termination を揃えてもなお不自然な滑りが残る場合の次段階として扱う。 |
+## High
 
-## 調査メモ
+### ARCH-001: SDK 公開 API への再移行
 
-- `PHYS-001`: 衝突判定が甘く見える理由として、学習環境と EnvForge で壁の厚さが
-  一致していない可能性がある。Scenario Bundle で壁をどの中心線、長さ、厚さとして
-  表現しているか、EnvForge の表示 mesh / collider と EmbodiedLab 側の obstacle
-  変換が同じ幾何として扱われているかを確認する。
-- `MAINT-001`: 2026-07-08 の整理で、demo replay への暗黙 fallback と旧 ONNX 入力互換
-  (`robot` / `goal` / `front_distance` / compact observation / flat observation) を削除した。
-  ローカル推論は現行 EmbodiedLab `policy.onnx` の `obs_0` / `obs_1` 入力契約に絞る。
-  また、Cloud panel から Replay 表示 step の絞り込みと要約文生成を
-  `EnvForgeReplayDisplayBuilder` へ分離し、次の責務分割に進みやすくした。
+- `EmbodiedLab.Unity` の新しい server-owned lifecycle と artifact / Replay API に追従する。
+- EnvForge の旧 SDK 呼び出しと重複 code を削除する。
+- Windows、Ubuntu、macOS target を個別に検証する。
 
-## 優先順位の初期案
+### UX-013 / UX-018 / UX-029 / UX-035 / UX-037 / UX-038: Library
 
-1. `UX-016` はスマホ主対象へ移行するための UI 全面見直しとして扱い、画面構成と主要導線から再設計する。
-2. `UX-015`, `UX-017` はスマホ主対象の入力設計と情報設計の方針として扱い、今後の UI はキーボードショートカットなしで完結し、開発用情報は必要時だけ出せることを前提にする。
-3. `UX-018` は過去のマップ、ジョブ設定、結果、ログ、推論モデルを再利用するための履歴ライブラリとして扱い、`UX-013` の artifact 選択を含む上位導線として設計する。
-4. `UX-005`, `UX-009`, `UX-013`, `UX-014`, `UX-040`, `VIS-002` を、編集体験と確認体験を阻害する残りの優先項目として扱う。
-5. `CLOUD-001`, `CLOUD-002`, `UX-007` は、ログと状態更新の調査を先に行い、UI 修正、接続設定修正、WebSocket lifecycle 修正を分ける。
-6. `OPS-001` は保持台帳とローカル job history を含む横断確認を行い、安全に不要と
-   判断できた古い API revision 2件の削除まで完了した。
-7. `ARCH-001` は `EmbodiedLab.Unity` への主要責務移行まで完了した。EnvForge 固有の履歴と UI は残し、SDK 側の通信サイズ上限と TLS 強制を次の hardening として扱う。
-8. `MAINT-001` は、機能追加や不具合修正の節目で定期点検として扱い、仕様変更ではなく読みやすさと冗長コード削除を目的にする。
-9. `UX-001`, `UX-003`, `UX-004`, `UX-006`, `UX-008`, `UX-011`, `UX-012`, `QA-001`, `QA-002`, `PHYS-001`, `VIS-001` は完了済みとして扱う。
+- map、job、Result、Replay、model を名前付きで一覧、選択、更新、再利用、削除できるようにする。
+- job settings の再実行、検索、絞り込み、stale 状態を整理する。
+- map と job の管理場所をスマホ UI の中で一貫させる。
+- cloud artifact の破壊的削除は通常の local history 削除と分離し、保持台帳を必ず照合する。
 
-## 保留事項
+### UX-015 / UX-016 / UX-027: Mobile interaction
 
-- 各項目の実装範囲はまだ確定していない。
-- Unity 実行中のため、この記録時点ではコード変更、Unity 起動、runtime 検証は行っていない。
-- `CLOUD-001` は EnvForge 側だけでなく EmbodiedLab / GCP 側の状態確認が必要になる。
+- keyboard、right click、mouse wheel に依存しない主要操作を用意する。
+- スマホ幅での panel、touch target、情報量、pan / zoom、wall rotation を整理する。
+- 暫定 `Rot` button と角度 slider / input の役割を目視確認して確定する。
+
+### UX-032: Wall connection
+
+- robot と goal の保護を維持したまま、wall endpoint / side を隙間なく接続できる snap を設計する。
+- 90度以外の微調整を維持する。
+
+### UX-034: Replay layout
+
+- compact / details で主要操作の順序、幅、button size を揃える。
+- World details 表示中も Replay UI を表示する。
+- 文字切れと touch 操作性を Unity で目視確認する。
+
+### UX-039: Text input isolation
+
+- 全 text / numeric input を共通 input blocker へ登録する。
+- 入力中の矢印、Backspace、Delete、Enter、文字入力を world / camera / shortcut へ渡さない。
+- Settings、Library、World の全入力欄で再発しないことを目視確認する。
+
+### UX-005 / UX-009: Dense wall selection and map reset
+
+- 密集した wall でも狙った wall を安定して選択できる操作を設計する。
+- 現在の map を安全に破棄し、平面、境界、wall、start、goal、主要設定を既定値へ戻す。
+- reset 前の確認と、保存済み map / 投入済み job への影響範囲を明示する。
+
+### UX-040: Goal randomization
+
+- 学習と Run AI で、必要に応じて goal position を試行ごとに変更できるようにする。
+- wall、境界、start と安全距離を避ける sampling rule を Scenario 契約の明示項目にする。
+- EmbodiedLab、EmbodiedLab.Unity、EnvForge が同じ seed と規則を使用し、UI と Replay で
+  goal source と現在位置を確認できるようにする。
+
+## Medium
+
+### UX-002: Wall duplication
+
+- 既存 wall を複製し、位置、長さ、角度だけを調整できるようにする。
+- スマホを主対象として、keyboard shortcut に依存しない導線を選ぶ。
+
+### UX-007: Result update flicker
+
+- WebSocket による状態更新時のちらつきを再現し、更新頻度、再描画範囲、panel state、
+  job history 保存を切り分ける。
+- 接続 lifecycle の問題と表示更新の問題を分けて修正する。
+
+### VIS-002: Walls in angle view
+
+- angle view でも wall の高さ、厚み、奥行き、端点を自然な実寸で表示する。
+- camera、field of view、mesh scale、material / outline、selection overlay を切り分けて確認する。
+
+### UX-022: Panel consistency
+
+- compact / details の同じ操作を、同じ順序、label、近い size に揃える。
+- Cloud、World、Replay を横断して最終確認する。
+
+### UX-033 / UX-017: User status and diagnostics
+
+- 通常 UI にはユーザー向け状態だけを表示する。
+- stream / fetch 診断は Editor-only overlay に分離する。
+- error がない通常実行では overlay を出さず、Library の Fetch は HTTP fetch だけを行う。
+
+## 運用上の制約
+
+- cloud resource を削除する前に `cloud-result-retention.md` と JSON 台帳を確認する。
+- human visual confirmation が完了条件の項目を、自動 test だけで Done にしない。
+- 新しい UI 項目を追加する前に、既存 panel の情報量とスマホでの操作価値を確認する。
