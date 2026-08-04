@@ -27,10 +27,11 @@ the `com.embodiedlab.unity` package. EnvForge is responsible for:
 
 `EmbodiedLab.Unity` submits and starts jobs, monitors progress over WebSocket,
 performs explicit HTTP resynchronization, cancels jobs, serializes the shared
-contracts, downloads model and replay artifacts, and distributes the tested
-ONNX Runtime managed and Windows x64 native binaries. EnvForge owns the
-navigation-specific inference behavior and UI without keeping a second local
-plugin copy.
+contracts, downloads model and replay artifacts, and distributes the ONNX
+Runtime integration. The current package pin includes a tested Windows x64
+native binary; Ubuntu and macOS are separate target builds that still require
+package and build verification. EnvForge owns the navigation-specific inference
+behavior and UI without keeping a second local plugin copy.
 
 ## Unity Workflow
 
