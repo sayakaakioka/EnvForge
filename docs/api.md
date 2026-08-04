@@ -138,7 +138,9 @@ EmbodiedLab; EnvForge-specific duplicate DTOs are not kept.
 
 The SDK verifies the declared byte size and SHA-256 digest before atomically
 replacing a local artifact. Replay parsing also verifies job, Scenario, chunk,
-phase, checkpoint, and step metadata. Artifacts are saved below
+phase, checkpoint, and step metadata. EnvForge rechecks cached artifact size and
+SHA-256 before reuse; a mismatch is treated as missing and replaced through the
+SDK's verified download path. Artifacts are saved below
 `Application.persistentDataPath`, not inside the repository. EnvForge keeps
 local paths and presentation state in its own job history because those are
 frontend concerns.

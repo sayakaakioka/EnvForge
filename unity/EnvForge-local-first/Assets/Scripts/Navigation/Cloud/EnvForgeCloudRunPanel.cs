@@ -860,19 +860,27 @@ namespace EnvForge.Navigation.Cloud
             ResultArtifacts artifacts = GetResultArtifacts();
             if (artifacts == null ||
                 (artifacts.ReplayBundle == null &&
-                 artifacts.OnnxModel == null &&
-                 artifacts.SentisModel == null))
+                 artifacts.OnnxModel == null))
             {
                 return;
             }
 
             EnvForgeJobRecordDto record = GetActiveJobRecord();
-            if (record != null &&
-                !string.IsNullOrWhiteSpace(record.local_onnx_path) &&
-                !string.IsNullOrWhiteSpace(record.local_replay_manifest_path) &&
-                File.Exists(record.local_replay_manifest_path) &&
-                File.Exists(record.local_onnx_path))
+            bool replayReady = artifacts.ReplayBundle == null ||
+                (record != null && IsCachedArtifactValid(
+                    record.local_replay_manifest_path,
+                    record.submission_id,
+                    artifacts.ReplayBundle.SizeBytes,
+                    artifacts.ReplayBundle.Sha256));
+            bool modelReady = artifacts.OnnxModel == null ||
+                (record != null && IsCachedArtifactValid(
+                    record.local_onnx_path,
+                    record.submission_id,
+                    artifacts.OnnxModel.SizeBytes,
+                    artifacts.OnnxModel.Sha256));
+            if (replayReady && modelReady)
             {
+                autoDownloadStarted = true;
                 return;
             }
 
@@ -951,8 +959,7 @@ namespace EnvForge.Navigation.Cloud
                 await DownloadReplayAsync();
             }
 
-            if (artifacts.OnnxModel != null ||
-                artifacts.SentisModel != null)
+            if (artifacts.OnnxModel != null)
             {
                 await DownloadModelArtifactsAsync();
             }
@@ -1155,7 +1162,11 @@ namespace EnvForge.Navigation.Cloud
                         return;
                     }
 
-                    if (!File.Exists(localChunkPath))
+                    if (!IsCachedArtifactValid(
+                            localChunkPath,
+                            job.SubmissionId,
+                            chunk.SizeBytes,
+                            chunk.Sha256))
                     {
                         status = $"Cloud: downloading replay {FormatReplayChunkLabel(chunk)}";
                         await job.DownloadReplayChunkAsync(
@@ -1829,10 +1840,9 @@ namespace EnvForge.Navigation.Cloud
             {
                 ResultArtifacts artifacts = GetResultArtifacts();
                 string replay = artifacts?.ReplayBundle == null ? "replay missing" : "replay available";
-                string model = artifacts?.OnnxModel == null &&
-                    artifacts?.SentisModel == null
-                        ? "model missing"
-                        : "model available";
+                string model = artifacts?.OnnxModel == null
+                    ? "model missing"
+                    : "model available";
                 return $"Cloud: {replay} · {model}";
             }
 
@@ -2045,7 +2055,14 @@ namespace EnvForge.Navigation.Cloud
         private string GetCurrentLocalOnnxModelPath()
         {
             EnvForgeJobRecordDto activeJob = GetActiveJobRecord();
-            if (activeJob == null || string.IsNullOrWhiteSpace(activeJob.local_onnx_path))
+            OnnxModelArtifactLocation model = GetResultArtifacts()?.OnnxModel;
+            if (activeJob == null ||
+                model == null ||
+                !IsCachedArtifactValid(
+                    activeJob.local_onnx_path,
+                    activeJob.submission_id,
+                    model.SizeBytes,
+                    model.Sha256))
             {
                 return string.Empty;
             }
@@ -2223,6 +2240,57 @@ namespace EnvForge.Navigation.Cloud
             }
 
             return builder.ToString();
+        }
+
+        private static bool IsCachedArtifactValid(
+            string path,
+            string submissionId,
+            int expectedSizeBytes,
+            string expectedSha256)
+        {
+            if (string.IsNullOrWhiteSpace(path) ||
+                string.IsNullOrWhiteSpace(expectedSha256) ||
+                expectedSizeBytes < 0 ||
+                !IsSafeLocalArtifactPath(path, submissionId) ||
+                !File.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                FileInfo file = new(path);
+                if (file.Length != expectedSizeBytes)
+                {
+                    return false;
+                }
+
+                using FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using SHA256 sha256 = SHA256.Create();
+                byte[] hash = sha256.ComputeHash(stream);
+                StringBuilder builder = new(hash.Length * 2);
+                foreach (byte value in hash)
+                {
+                    builder.Append(value.ToString("x2", CultureInfo.InvariantCulture));
+                }
+
+                return string.Equals(
+                    builder.ToString(),
+                    expectedSha256,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+            catch (CryptographicException)
+            {
+                return false;
+            }
         }
 
         private static bool TryBuildSafeChildPath(string rootDirectory, string relativePath, out string safePath)
@@ -2520,7 +2588,14 @@ namespace EnvForge.Navigation.Cloud
             }
 
             string manifestPath = latestJob?.local_replay_manifest_path;
-            if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
+            bool cachedManifestValid = replayBundle != null &&
+                latestJob != null &&
+                IsCachedArtifactValid(
+                    manifestPath,
+                    latestJob.submission_id,
+                    replayBundle.SizeBytes,
+                    replayBundle.Sha256);
+            if (!cachedManifestValid)
             {
                 if (replayBundle == null || !IsCompletedResult())
                 {

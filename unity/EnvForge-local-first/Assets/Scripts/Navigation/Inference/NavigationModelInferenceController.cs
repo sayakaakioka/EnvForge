@@ -122,7 +122,10 @@ namespace EnvForge.Navigation.Inference
             ForwardCameraSensor camera = cameras[0];
             GoalVectorSensor goal = goals[0];
             if (
-                camera.Width <= 0 || camera.Height <= 0 ||
+                camera.Width < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Width > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
+                camera.Height < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Height > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
                 string.IsNullOrWhiteSpace(camera.ObservationName) ||
                 string.IsNullOrWhiteSpace(goal.ObservationName) ||
                 string.Equals(camera.ObservationName, goal.ObservationName, StringComparison.Ordinal) ||
@@ -132,9 +135,9 @@ namespace EnvForge.Navigation.Inference
                 !goal.Values.SequenceEqual(new[] { Values.GoalAngleDegrees, Values.GoalDistanceMeters }) ||
                 action.Layout == null ||
                 !action.Layout.SequenceEqual(new[] { Layout.Forward, Layout.Turn }) ||
-                action.ForwardStepMeters <= 0d ||
-                action.TurnDegreesPerStep <= 0d ||
-                action.StepDurationSeconds <= 0d)
+                !IsFinitePositive(action.ForwardStepMeters) ||
+                !IsFinitePositive(action.TurnDegreesPerStep) ||
+                !IsFinitePositive(action.StepDurationSeconds))
             {
                 error = "Scenario does not match the supported navigation policy contract.";
                 return false;
@@ -143,7 +146,8 @@ namespace EnvForge.Navigation.Inference
             ReleaseImageObservationResources();
             imageObservationWidth = camera.Width;
             imageObservationHeight = camera.Height;
-            imageObservationValueCount = ImageObservationChannels * imageObservationWidth * imageObservationHeight;
+            imageObservationValueCount = checked(
+                ImageObservationChannels * imageObservationWidth * imageObservationHeight);
             imageObservationInputName = camera.ObservationName;
             numericObservationInputName = goal.ObservationName;
             forwardStepMeters = (float)action.ForwardStepMeters;
@@ -673,6 +677,14 @@ namespace EnvForge.Navigation.Inference
                  (dimensions.Length == 2 &&
                   (dimensions[0] <= 0 || dimensions[0] == 1) &&
                   dimensions[1] == 2));
+        }
+
+        private static bool IsFinitePositive(double value)
+        {
+            return !double.IsNaN(value) &&
+                !double.IsInfinity(value) &&
+                value > 0d &&
+                value <= float.MaxValue;
         }
 
         private void ApplyTrainingMotionProfile()

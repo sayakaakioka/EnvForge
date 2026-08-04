@@ -15,6 +15,17 @@ INFERENCE_SOURCE = (
     / "Inference"
     / "NavigationModelInferenceController.cs"
 )
+SCENE_BUILDER_SOURCE = (
+    UNITY_PROJECT / "Assets" / "Scripts" / "Navigation" / "NavigationSceneBuilder.cs"
+)
+CONTRACT_DEFAULTS_SOURCE = (
+    UNITY_PROJECT
+    / "Assets"
+    / "Scripts"
+    / "Navigation"
+    / "Contracts"
+    / "NavigationScenarioBundleDefaults.cs"
+)
 LOCAL_ONNX_RUNTIME = UNITY_PROJECT / "Assets" / "Plugins" / "ONNXRuntime"
 SDK_REVISION = "abb976ea97b1010fb3a6dbfb177cefdde5aa90b6"
 SDK_URL = "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#" + SDK_REVISION
@@ -93,6 +104,39 @@ class EmbodiedLabUnityBoundaryTests(unittest.TestCase):
         self.assertNotIn("Mathf.Exp(-rawForward)", inference)
         self.assertIn("rawForward < 0f || rawForward > 1f", inference)
         self.assertIn("rawTurn < -1f || rawTurn > 1f", inference)
+
+    def test_cached_artifacts_are_verified_before_reuse(self):
+        panel = (CLOUD_SOURCE / "EnvForgeCloudRunPanel.cs").read_text(encoding="utf-8")
+        self.assertGreaterEqual(panel.count("IsCachedArtifactValid("), 5)
+        self.assertIn("expectedSizeBytes", panel)
+        self.assertIn("expectedSha256", panel)
+        self.assertIn("sha256.ComputeHash(stream)", panel)
+
+    def test_camera_allocation_uses_schema_bounds(self):
+        inference = INFERENCE_SOURCE.read_text(encoding="utf-8")
+        scene_builder = SCENE_BUILDER_SOURCE.read_text(encoding="utf-8")
+        defaults = CONTRACT_DEFAULTS_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("MinimumCameraDimensionPixels = 20", defaults)
+        self.assertIn("MaximumCameraDimensionPixels = 512", defaults)
+        for source in (inference, scene_builder):
+            self.assertIn(
+                "camera.Width < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels",
+                source,
+            )
+            self.assertIn(
+                "camera.Width > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels",
+                source,
+            )
+            self.assertIn(
+                "camera.Height < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels",
+                source,
+            )
+            self.assertIn(
+                "camera.Height > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels",
+                source,
+            )
+            self.assertIn("value <= float.MaxValue", source)
+        self.assertIn("checked(", inference)
 
     @staticmethod
     def _read_json(path):

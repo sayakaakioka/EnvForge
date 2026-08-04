@@ -532,11 +532,15 @@ namespace EnvForge.Navigation
             ForwardCameraSensor camera = cameras[0];
             GoalVectorSensor goal = goals[0];
             string scenarioGoalId = scenario.World?.Goal?.Id;
-            if (string.IsNullOrWhiteSpace(scenarioGoalId) ||
+            if (camera.Width < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Width > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
+                camera.Height < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Height > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
+                string.IsNullOrWhiteSpace(scenarioGoalId) ||
                 !string.Equals(goal.Target, scenarioGoalId, System.StringComparison.Ordinal))
             {
                 throw new System.InvalidOperationException(
-                    "Scenario goal-vector target does not match the world goal.");
+                    "Scenario camera dimensions or goal-vector target are invalid.");
             }
 
             goalId = scenarioGoalId;
@@ -550,12 +554,25 @@ namespace EnvForge.Navigation
             goalVectorValues = goal.Values?.ToArray() ?? System.Array.Empty<Values>();
 
             ActionSpace action = scenario.Robot?.ActionSpace;
-            if (action != null)
+            if (action == null ||
+                !IsFinitePositive(action.ForwardStepMeters) ||
+                !IsFinitePositive(action.TurnDegreesPerStep) ||
+                !IsFinitePositive(action.StepDurationSeconds))
             {
-                forwardStepMeters = (float)action.ForwardStepMeters;
-                turnDegreesPerStep = (float)action.TurnDegreesPerStep;
-                stepDurationSeconds = (float)action.StepDurationSeconds;
+                throw new System.InvalidOperationException("Scenario action values must be finite and positive.");
             }
+
+            forwardStepMeters = (float)action.ForwardStepMeters;
+            turnDegreesPerStep = (float)action.TurnDegreesPerStep;
+            stepDurationSeconds = (float)action.StepDurationSeconds;
+        }
+
+        private static bool IsFinitePositive(double value)
+        {
+            return !double.IsNaN(value) &&
+                !double.IsInfinity(value) &&
+                value > 0d &&
+                value <= float.MaxValue;
         }
 
         private Vector2 GetMinimumFloorSize()

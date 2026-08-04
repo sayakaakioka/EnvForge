@@ -320,8 +320,7 @@ namespace EnvForge.Navigation.Cloud
             }
 
             record.replay_artifact_path = artifacts.ReplayBundle?.Path;
-            record.onnx_artifact_path = artifacts.OnnxModel?.Path ??
-                artifacts.SentisModel?.Path;
+            record.onnx_artifact_path = artifacts.OnnxModel?.Path;
         }
 
         private static string FormatStatus(ResultStatus status)

@@ -22,6 +22,8 @@ namespace EnvForge.Navigation.Contracts
         public const float CameraFarClipMeters = 100f;
         public const float RobotRadiusMeters = 0.45f;
         public const float GoalRadiusMeters = 0.45f;
+        public const int MinimumCameraDimensionPixels = 20;
+        public const int MaximumCameraDimensionPixels = 512;
         public const float WallHeightMeters = 2f;
         public const float ForwardStepMeters = 0.2f;
         public const float TurnDegreesPerStep = 15f;
