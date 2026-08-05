@@ -21,6 +21,14 @@ embodied AI systems.
 
 For sub-agent orchestration, read `docs/implementation/subagent-workflow.md`.
 
+## Local GitHub Tooling
+
+GitHub CLI is installed and authenticated inside WSL2, not on Windows. Run
+every `gh` command from this Windows checkout as `wsl -e gh ...`; do not check
+the Windows `PATH` for `gh` first. When Git or SSH must use the same WSL2
+authentication, run Git through WSL2 against the current checkout and set
+`core.fileMode=false` for repositories mounted under `/mnt/`.
+
 ## Branch Notice
 
 This repository currently contains a separate experimental branch of the
