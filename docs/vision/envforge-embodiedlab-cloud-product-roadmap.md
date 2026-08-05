@@ -27,8 +27,10 @@ EnvForge には、世界編集、Unity scene からの Scenario Bundle 構築、
 ローカル履歴、Replay の可視化、navigation 固有の ONNX Runtime 推論ロジックを残す。
 API transport、ジョブ状態の同期、artifact location の解決、Replay Bundle の取得と
 読み込み、ONNX Runtime package の配布と versioning は `EmbodiedLab.Unity` が所有する。
-EnvForge は同じ binary のローカルコピーを持たない。Windows、Ubuntu、macOS は
-個別の target として package と build を検証する。
+EnvForge は同じ binary のローカルコピーを持たない。Cloud、Result、Replay の
+workflow は Windows x64、Ubuntu x64、macOS を対象とする。同梱 native ONNX Runtime
+による local inference は現時点で Windows x64 のみを対象とし、Ubuntu と macOS は
+native integration 追加後に検証する。
 
 過去の MVP 実装、ローカル ML-Agents trainer、Python 環境、古い学習成果物は
 現行仕様を動かすためのコードとして保持しない。必要になった場合は Git 履歴を参照する。
@@ -80,17 +82,16 @@ Replay Bundle は動画ではなく構造化ログとして保存する。`manif
 
 ## 現在の優先事項
 
-旧 SDK を使った初回移行は完了している。現在は `EmbodiedLab.Unity` の公開 API を
-server-owned lifecycle、artifact 検証、逐次 Replay 読み込みへ再整理している。
+EmbodiedLab の server-owned lifecycle と最終データ契約、および
+`EmbodiedLab.Unity` の厳密な artifact / Replay 検証は main へ統合済みである。
+EnvForge も同じ SDK revision と契約へ移行し、Scenario JSON を runtime 設定の
+正本として使う。
 
 次の優先事項は以下である。
 
-1. EmbodiedLab で server-owned job lifecycle と最終データ契約を確定する。
-2. `EmbodiedLab.Unity` の公開 API と tutorial を確定する。
-3. EnvForge を新 SDK API 利用へ書き直し、旧呼び出しと重複 code を削除する。
-4. Unity 2022.3.19f1 と Unity 6.3 LTS、および対象 platform build を確認する。
-5. Replay / Library / mobile UI の active backlog を人間の目視で確認する。
-6. 固定マップを維持したまま、宣言的な episode ごとの環境生成を追加する。
+1. Windows x64 local inference と、3 OS の cloud / result / replay build を個別に確認する。
+2. Replay / Library / mobile UI の active backlog を人間の目視で確認する。
+3. 固定マップを維持したまま、宣言的な episode ごとの環境生成を追加する。
 
 ## 保留事項
 

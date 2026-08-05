@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using EmbodiedLab.Contracts;
 using EmbodiedLab.Unity;
 using UnityEngine;
@@ -15,8 +16,6 @@ namespace EnvForge.Navigation
         private static readonly Vector3 DefaultAgentStartPosition = NavigationScenarioBundleDefaults.AgentStartPosition;
         private static readonly Quaternion DefaultAgentStartRotation = NavigationScenarioBundleDefaults.AgentStartRotation;
         private static readonly Vector3 DefaultGoalStartPosition = NavigationScenarioBundleDefaults.GoalStartPosition;
-        private const int SegmentationImageHeight = NavigationScenarioBundleDefaults.SegmentationImageHeight;
-        private const int SegmentationImageWidth = NavigationScenarioBundleDefaults.SegmentationImageWidth;
         private const int HiddenFromSegmentationCameraLayer = 2;
         private const int MaxEpisodeSteps = NavigationScenarioBundleDefaults.MaxEpisodeSteps;
         private const string DefaultScenarioId = NavigationScenarioBundleDefaults.ScenarioId;
@@ -25,9 +24,25 @@ namespace EnvForge.Navigation
         private const float UserWallPlacementGapMeters = 0.35f;
 
         [SerializeField] private Vector2 floorSize = new(16f, 12f);
-        [SerializeField] private float wallHeight = 1.8f;
+        [SerializeField] private float wallHeight = NavigationScenarioBundleDefaults.WallHeightMeters;
         [SerializeField] private float wallThickness = 0.35f;
-        [SerializeField] private float goalReachRadius = 1.2f;
+        [SerializeField] private string goalId = NavigationScenarioBundleDefaults.GoalId;
+        [SerializeField] private float goalReachRadius = NavigationScenarioBundleDefaults.GoalRadiusMeters;
+        [SerializeField] private int segmentationImageWidth = NavigationScenarioBundleDefaults.SegmentationImageWidth;
+        [SerializeField] private int segmentationImageHeight = NavigationScenarioBundleDefaults.SegmentationImageHeight;
+        [SerializeField] private string cameraSensorId = NavigationScenarioBundleDefaults.CameraSensorId;
+        [SerializeField] private string cameraObservationName = NavigationScenarioBundleDefaults.CameraObservationName;
+        [SerializeField] private SemanticMode cameraSemanticMode = SemanticMode.TraversableVsBlocked;
+        [SerializeField] private string goalVectorSensorId = NavigationScenarioBundleDefaults.GoalVectorSensorId;
+        [SerializeField] private string goalVectorObservationName = NavigationScenarioBundleDefaults.GoalVectorObservationName;
+        [SerializeField] private Values[] goalVectorValues =
+        {
+            Values.GoalAngleDegrees,
+            Values.GoalDistanceMeters,
+        };
+        [SerializeField] private float forwardStepMeters = NavigationScenarioBundleDefaults.ForwardStepMeters;
+        [SerializeField] private float turnDegreesPerStep = NavigationScenarioBundleDefaults.TurnDegreesPerStep;
+        [SerializeField] private float stepDurationSeconds = NavigationScenarioBundleDefaults.StepDurationSeconds;
         [SerializeField] private bool showSegmentationPreview = true;
         [SerializeField] private Rect segmentationPreviewRect = new(0.74f, 0.02f, 0.24f, 0.18f);
         [SerializeField] private float agentCollisionRadius = NavigationScenarioBundleDefaults.RobotRadiusMeters;
@@ -56,6 +71,7 @@ namespace EnvForge.Navigation
         private Transform agentTransform;
         private Transform goalTransform;
         private NavigationLiveController liveController;
+        private NavigationModelInferenceController inferenceController;
         private Vector3 agentStartPosition = NavigationScenarioBundleDefaults.AgentStartPosition;
         private Quaternion agentStartRotation = NavigationScenarioBundleDefaults.AgentStartRotation;
         private Vector3 goalStartPosition = NavigationScenarioBundleDefaults.GoalStartPosition;
@@ -142,6 +158,8 @@ namespace EnvForge.Navigation
             goalReachRadius = scenario.World?.Goal?.Radius > 0
                 ? (float)scenario.World.Goal.Radius
                 : NavigationScenarioBundleDefaults.CreateSource().GoalReachRadius;
+            ApplyScenarioPolicySettings(scenario);
+            trainingSettings.ApplyFrom(scenario);
             SetAgentCollisionRadius(scenario.Robot != null && scenario.Robot.Radius > 0
                 ? (float)scenario.Robot.Radius
                 : NavigationScenarioBundleDefaults.RobotRadiusMeters);
@@ -211,7 +229,7 @@ namespace EnvForge.Navigation
             episodeEvents = episodeEventHub;
             policyObservationProvider = gameObject.AddComponent<NavigationGoalObservationProvider>();
             ConfigureRuntimeScenarioContracts();
-            NavigationModelInferenceController inferenceController = agent.GetComponent<NavigationModelInferenceController>();
+            inferenceController = agent.GetComponent<NavigationModelInferenceController>();
             inferenceController.Configure(
                 agent.GetComponent<AgentMotor>(),
                 agent.GetComponent<Rigidbody>(),
@@ -361,15 +379,15 @@ namespace EnvForge.Navigation
                 0f,
                 trainingSettings.CameraMountHeightMeters - agent.position.y,
                 0f);
-            cameraObject.transform.localRotation = Quaternion.Euler(NavigationScenarioBundleDefaults.CameraPitchDegrees, 0f, 0f);
+            cameraObject.transform.localRotation = Quaternion.Euler(trainingSettings.CameraPitchDegrees, 0f, 0f);
 
             Camera camera = cameraObject.AddComponent<Camera>();
             camera.enabled = false;
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = Color.blue;
-            camera.fieldOfView = NavigationScenarioBundleDefaults.CameraVerticalFovDegrees;
-            camera.nearClipPlane = NavigationScenarioBundleDefaults.CameraNearClipMeters;
-            camera.farClipPlane = NavigationScenarioBundleDefaults.CameraFarClipMeters;
+            camera.fieldOfView = trainingSettings.CameraVerticalFovDegrees;
+            camera.nearClipPlane = trainingSettings.CameraNearClipMeters;
+            camera.farClipPlane = trainingSettings.CameraFarClipMeters;
             camera.cullingMask = ~(1 << HiddenFromSegmentationCameraLayer);
 
             return camera;
@@ -378,7 +396,12 @@ namespace EnvForge.Navigation
         private void ConfigureSegmentationPreview(GameObject cameraObject, Camera segmentationCamera)
         {
             SegmentationPreviewOverlay preview = cameraObject.AddComponent<SegmentationPreviewOverlay>();
-            preview.Configure(showSegmentationPreview, segmentationCamera, segmentationPreviewRect, SegmentationImageWidth, SegmentationImageHeight);
+            preview.Configure(
+                showSegmentationPreview,
+                segmentationCamera,
+                segmentationPreviewRect,
+                segmentationImageWidth,
+                segmentationImageHeight);
         }
 
         private static Material ResolveMaterial(Material assignedMaterial, string fallbackMaterialName, Color fallbackColor)
@@ -467,6 +490,89 @@ namespace EnvForge.Navigation
             float observationScale = Mathf.Max(1f, floorSize.magnitude);
             policyObservationProvider?.Configure(navigationMetrics, observationScale, goalReachRadius);
             goalReachChecker?.Configure(episodeEvents, navigationMetrics, goalReachRadius);
+            if (goalTransform != null)
+            {
+                goalTransform.localScale = Vector3.one * (goalReachRadius * 2f);
+            }
+
+            ScenarioBundle scenario = BuildScenarioBundle();
+            if (inferenceController != null &&
+                !inferenceController.ConfigureScenario(scenario, out string contractError))
+            {
+                Debug.LogError($"EnvForge inference contract is invalid: {contractError}");
+            }
+
+            Camera segmentationCamera = agentTransform == null
+                ? null
+                : agentTransform.GetComponentInChildren<Camera>(includeInactive: true);
+            if (segmentationCamera != null)
+            {
+                segmentationCamera.fieldOfView = trainingSettings.CameraVerticalFovDegrees;
+                segmentationCamera.nearClipPlane = trainingSettings.CameraNearClipMeters;
+                segmentationCamera.farClipPlane = trainingSettings.CameraFarClipMeters;
+                segmentationCamera.transform.localRotation = Quaternion.Euler(
+                    trainingSettings.CameraPitchDegrees,
+                    0f,
+                    0f);
+            }
+        }
+
+        private void ApplyScenarioPolicySettings(ScenarioBundle scenario)
+        {
+            ForwardCameraSensor[] cameras = scenario.Sensors?.OfType<ForwardCameraSensor>().ToArray() ??
+                System.Array.Empty<ForwardCameraSensor>();
+            GoalVectorSensor[] goals = scenario.Sensors?.OfType<GoalVectorSensor>().ToArray() ??
+                System.Array.Empty<GoalVectorSensor>();
+            if (cameras.Length != 1 || goals.Length != 1)
+            {
+                throw new System.InvalidOperationException(
+                    "Scenario must define exactly one forward camera and one goal-vector observation.");
+            }
+
+            ForwardCameraSensor camera = cameras[0];
+            GoalVectorSensor goal = goals[0];
+            string scenarioGoalId = scenario.World?.Goal?.Id;
+            if (camera.Width < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Width > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
+                camera.Height < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Height > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
+                string.IsNullOrWhiteSpace(scenarioGoalId) ||
+                !string.Equals(goal.Target, scenarioGoalId, System.StringComparison.Ordinal))
+            {
+                throw new System.InvalidOperationException(
+                    "Scenario camera dimensions or goal-vector target are invalid.");
+            }
+
+            goalId = scenarioGoalId;
+            segmentationImageWidth = camera.Width;
+            segmentationImageHeight = camera.Height;
+            cameraSensorId = camera.Id;
+            cameraObservationName = camera.ObservationName;
+            cameraSemanticMode = camera.SemanticMode;
+            goalVectorSensorId = goal.Id;
+            goalVectorObservationName = goal.ObservationName;
+            goalVectorValues = goal.Values?.ToArray() ?? System.Array.Empty<Values>();
+
+            ActionSpace action = scenario.Robot?.ActionSpace;
+            if (action == null ||
+                !IsFinitePositive(action.ForwardStepMeters) ||
+                !IsFinitePositive(action.TurnDegreesPerStep) ||
+                !IsFinitePositive(action.StepDurationSeconds))
+            {
+                throw new System.InvalidOperationException("Scenario action values must be finite and positive.");
+            }
+
+            forwardStepMeters = (float)action.ForwardStepMeters;
+            turnDegreesPerStep = (float)action.TurnDegreesPerStep;
+            stepDurationSeconds = (float)action.StepDurationSeconds;
+        }
+
+        private static bool IsFinitePositive(double value)
+        {
+            return !double.IsNaN(value) &&
+                !double.IsInfinity(value) &&
+                value > 0d &&
+                value <= float.MaxValue;
         }
 
         private Vector2 GetMinimumFloorSize()
@@ -1185,10 +1291,20 @@ namespace EnvForge.Navigation
                 AgentStartPosition = agentStartPosition,
                 AgentStartRotation = agentStartRotation,
                 RobotRadiusMeters = agentCollisionRadius,
+                ForwardStepMeters = forwardStepMeters,
+                TurnDegreesPerStep = turnDegreesPerStep,
+                StepDurationSeconds = stepDurationSeconds,
                 GoalStartPosition = goalStartPosition,
+                GoalId = goalId,
                 GoalReachRadius = goalReachRadius,
-                SegmentationImageWidth = SegmentationImageWidth,
-                SegmentationImageHeight = SegmentationImageHeight,
+                SegmentationImageWidth = segmentationImageWidth,
+                SegmentationImageHeight = segmentationImageHeight,
+                CameraSensorId = cameraSensorId,
+                CameraObservationName = cameraObservationName,
+                CameraSemanticMode = cameraSemanticMode,
+                GoalVectorSensorId = goalVectorSensorId,
+                GoalVectorObservationName = goalVectorObservationName,
+                GoalVectorValues = goalVectorValues,
                 MaxEpisodeSteps = MaxEpisodeSteps,
                 UserWalls = userWalls,
             };

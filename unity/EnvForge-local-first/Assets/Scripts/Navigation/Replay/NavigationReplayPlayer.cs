@@ -824,6 +824,28 @@ namespace EnvForge.Navigation.Replay
             return string.Join(", ", parts);
         }
 
+        private static string FormatNamedValues(ICollection<ReplayActionValue> values)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return "-";
+            }
+
+            List<string> parts = new(values.Count);
+            foreach (ReplayActionValue value in values)
+            {
+                string name = value switch
+                {
+                    ReplayForwardActionValue => "forward",
+                    ReplayTurnActionValue => "turn",
+                    _ => "unsupported",
+                };
+                parts.Add($"{name}:{value.Value:0.00}");
+            }
+
+            return string.Join(", ", parts);
+        }
+
         private static string Shorten(string value, int maxLength)
         {
             if (string.IsNullOrEmpty(value))

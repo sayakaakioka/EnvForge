@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.IO;
+using EnvForge.Navigation.Contracts;
 using EnvForge.Navigation.Inference;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -28,7 +29,7 @@ namespace EnvForge.Navigation.Automation
         private int episodeCount = 20;
         private int maxEpisodeSteps = 1000;
         private float fixedStepSeconds = 0.1f;
-        private float goalRadius = 1.2f;
+        private float goalRadius = NavigationScenarioBundleDefaults.GoalRadiusMeters;
         private int evaluationSeed = 10;
         private bool hasFixedStartPose;
         private bool useRandomStartPose;
@@ -59,7 +60,10 @@ namespace EnvForge.Navigation.Automation
             automation.episodeCount = NavigationAutomationArguments.GetInt(EpisodesArgument, 20, 1);
             automation.maxEpisodeSteps = NavigationAutomationArguments.GetInt(MaxStepsArgument, 1000, 1);
             automation.fixedStepSeconds = NavigationAutomationArguments.GetFloat(StepSecondsArgument, 0.1f, 0.001f);
-            automation.goalRadius = NavigationAutomationArguments.GetFloat(GoalRadiusArgument, 1.2f, 0.001f);
+            automation.goalRadius = NavigationAutomationArguments.GetFloat(
+                GoalRadiusArgument,
+                NavigationScenarioBundleDefaults.GoalRadiusMeters,
+                0.001f);
             automation.evaluationSeed = NavigationAutomationArguments.GetInt(SeedArgument, 10, int.MinValue);
             automation.worldVariant = NavigationAutomationArguments.GetValue(VariantArgument) ?? "default";
             automation.TryConfigureFixedStartPose();

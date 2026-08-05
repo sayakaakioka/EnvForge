@@ -308,8 +308,8 @@ namespace EnvForge.Navigation.Cloud
                 return;
             }
 
-            record.training_timesteps = summary.TrainingTimesteps;
-            record.training_seed = summary.TrainingSeed;
+            record.training_timesteps = summary.Configuration.Timesteps;
+            record.training_seed = summary.Configuration.Seed;
         }
 
         private static void ApplyArtifactMetadata(EnvForgeJobRecordDto record, ResultArtifacts artifacts)
@@ -320,9 +320,7 @@ namespace EnvForge.Navigation.Cloud
             }
 
             record.replay_artifact_path = artifacts.ReplayBundle?.Path;
-            record.onnx_artifact_path = artifacts.OnnxModel?.Path ??
-                artifacts.SentisModel?.Path ??
-                artifacts.Model?.Path;
+            record.onnx_artifact_path = artifacts.OnnxModel?.Path;
         }
 
         private static string FormatStatus(ResultStatus status)
@@ -358,7 +356,7 @@ namespace EnvForge.Navigation.Cloud
         public string status;
         public string trainer_summary;
         public int training_timesteps;
-        public int training_seed;
+        public long training_seed;
         public string progress_phase;
         public int progress_current_step;
         public int progress_total_steps;

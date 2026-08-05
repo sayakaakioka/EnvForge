@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using EmbodiedLab.Contracts;
+using EnvForge.Navigation.Contracts;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using UnityEngine;
@@ -16,17 +18,18 @@ namespace EnvForge.Navigation.Inference
         [SerializeField] private int decisionIntervalFrames = 1;
 
         private const int ImageObservationChannels = 3;
-        private const int ImageObservationHeight = 84;
-        private const int ImageObservationWidth = 112;
-        private const int ImageObservationValueCount = ImageObservationChannels * ImageObservationHeight * ImageObservationWidth;
         private const int NumericObservationValueCount = 2;
-        private const string ImageObservationInputName = "obs_0";
-        private const string NumericObservationInputName = "obs_1";
-        private const float TrainingForwardStepMeters = 0.2f;
-        private const float TrainingTurnDegreesPerStep = 15f;
-        private const float TrainingStepSeconds = 0.1f;
+        private const string ActionOutputName = "action";
 
-        private readonly float[] imageObservationBuffer = new float[ImageObservationValueCount];
+        private int imageObservationHeight;
+        private int imageObservationWidth;
+        private int imageObservationValueCount;
+        private string imageObservationInputName;
+        private string numericObservationInputName;
+        private float forwardStepMeters;
+        private float turnDegreesPerStep;
+        private float stepDurationSeconds;
+        private float[] imageObservationBuffer = Array.Empty<float>();
         private readonly float[] numericObservationBuffer = new float[NumericObservationValueCount];
 
         private AgentMotor motor;
@@ -48,6 +51,7 @@ namespace EnvForge.Navigation.Inference
         private string lastObservationSummary = "obs none";
         private string lastImageObservationSummary = "image obs none";
         private string lastErrorDetails = string.Empty;
+        private bool scenarioConfigured;
 
         public bool IsRunning => isRunning;
 
@@ -95,6 +99,63 @@ namespace EnvForge.Navigation.Inference
             liveController = controller;
             episodeEventHub = eventHub;
             observationProvider = observations;
+        }
+
+        internal bool ConfigureScenario(ScenarioBundle scenario, out string error)
+        {
+            error = string.Empty;
+            if (scenario?.Robot?.ActionSpace == null || scenario.Sensors == null)
+            {
+                error = "Scenario is missing the action or sensor contract.";
+                return false;
+            }
+
+            ForwardCameraSensor[] cameras = scenario.Sensors.OfType<ForwardCameraSensor>().ToArray();
+            GoalVectorSensor[] goals = scenario.Sensors.OfType<GoalVectorSensor>().ToArray();
+            ActionSpace action = scenario.Robot.ActionSpace;
+            if (cameras.Length != 1 || goals.Length != 1)
+            {
+                error = "Scenario must define exactly one forward camera and one goal-vector observation.";
+                return false;
+            }
+
+            ForwardCameraSensor camera = cameras[0];
+            GoalVectorSensor goal = goals[0];
+            if (
+                camera.Width < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Width > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
+                camera.Height < NavigationScenarioBundleDefaults.MinimumCameraDimensionPixels ||
+                camera.Height > NavigationScenarioBundleDefaults.MaximumCameraDimensionPixels ||
+                string.IsNullOrWhiteSpace(camera.ObservationName) ||
+                string.IsNullOrWhiteSpace(goal.ObservationName) ||
+                string.Equals(camera.ObservationName, goal.ObservationName, StringComparison.Ordinal) ||
+                camera.SemanticMode != SemanticMode.TraversableVsBlocked ||
+                !string.Equals(goal.Target, scenario.World?.Goal?.Id, StringComparison.Ordinal) ||
+                goal.Values == null ||
+                !goal.Values.SequenceEqual(new[] { Values.GoalAngleDegrees, Values.GoalDistanceMeters }) ||
+                action.Layout == null ||
+                !action.Layout.SequenceEqual(new[] { Layout.Forward, Layout.Turn }) ||
+                !IsFinitePositive(action.ForwardStepMeters) ||
+                !IsFinitePositive(action.TurnDegreesPerStep) ||
+                !IsFinitePositive(action.StepDurationSeconds))
+            {
+                error = "Scenario does not match the supported navigation policy contract.";
+                return false;
+            }
+
+            ReleaseImageObservationResources();
+            imageObservationWidth = camera.Width;
+            imageObservationHeight = camera.Height;
+            imageObservationValueCount = checked(
+                ImageObservationChannels * imageObservationWidth * imageObservationHeight);
+            imageObservationInputName = camera.ObservationName;
+            numericObservationInputName = goal.ObservationName;
+            forwardStepMeters = (float)action.ForwardStepMeters;
+            turnDegreesPerStep = (float)action.TurnDegreesPerStep;
+            stepDurationSeconds = (float)action.StepDurationSeconds;
+            imageObservationBuffer = new float[imageObservationValueCount];
+            scenarioConfigured = true;
+            return true;
         }
 
         public void SetCameraMountHeightMeters(float mountHeightMeters)
@@ -193,6 +254,13 @@ namespace EnvForge.Navigation.Inference
         {
             StopInference();
             error = string.Empty;
+
+            if (!scenarioConfigured)
+            {
+                error = "The current Scenario policy contract has not been configured.";
+                statusSummary = "Inference: Scenario contract missing";
+                return false;
+            }
 
             if (string.IsNullOrWhiteSpace(localModelPath))
             {
@@ -339,10 +407,9 @@ namespace EnvForge.Navigation.Inference
             {
                 using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = session.Run(CreateInputs());
 
-                DisposableNamedOnnxValue output = results.FirstOrDefault(result => result.Name == outputName) ??
-                                                  results.FirstOrDefault();
+                DisposableNamedOnnxValue output = results.FirstOrDefault(result => result.Name == outputName);
                 Tensor<float> actionTensor = output?.AsTensor<float>();
-                if (actionTensor == null || actionTensor.Length < 2)
+                if (actionTensor == null || actionTensor.Length != 2)
                 {
                     StopWithError("Inference: invalid action output");
                     return;
@@ -350,13 +417,25 @@ namespace EnvForge.Navigation.Inference
 
                 float rawForward = actionTensor.GetValue(0);
                 float rawTurn = actionTensor.GetValue(1);
-                float forward = Mathf.Clamp01(rawForward);
-                float turn = Mathf.Clamp(rawTurn, -1f, 1f);
+                if (!float.IsFinite(rawForward) || !float.IsFinite(rawTurn))
+                {
+                    StopWithError("Inference: non-finite action output");
+                    return;
+                }
+
+                if (rawForward < 0f || rawForward > 1f || rawTurn < -1f || rawTurn > 1f)
+                {
+                    StopWithError(
+                        "Inference: action output outside contract range",
+                        $"forward={rawForward:R}, turn={rawTurn:R}");
+                    return;
+                }
+
+                float forward = rawForward;
+                float turn = rawTurn;
                 motor.SetInput(forward, turn);
                 lastActionSummary = FormatActionSummary(rawForward, rawTurn, forward, turn);
-                statusSummary = IsActionContractViolation(rawForward, rawTurn)
-                    ? "Inference: contract violation"
-                    : $"Inference: running {Path.GetFileName(modelPath)}";
+                statusSummary = $"Inference: running {Path.GetFileName(modelPath)}";
             }
             catch (Exception ex)
             {
@@ -370,18 +449,7 @@ namespace EnvForge.Navigation.Inference
             float forward,
             float turn)
         {
-            string warning = IsActionContractViolation(rawForward, rawTurn)
-                ? " · CONTRACT VIOLATION action out of range"
-                : string.Empty;
-            return $"action raw f {rawForward:0.00} t {rawTurn:0.00} · applied f {forward:0.00} t {turn:0.00}{warning}";
-        }
-
-        private static bool IsActionContractViolation(float rawForward, float rawTurn)
-        {
-            return rawForward < -0.0001f ||
-                rawForward > 1.0001f ||
-                rawTurn < -1.0001f ||
-                rawTurn > 1.0001f;
+            return $"action policy f {rawForward:0.00} t {rawTurn:0.00} · applied f {forward:0.00} t {turn:0.00}";
         }
 
         private void StopWithError(string summary, string details = "")
@@ -442,7 +510,7 @@ namespace EnvForge.Navigation.Inference
             List<NamedOnnxValue> inputs = new(inputBindings.Count);
             foreach (ModelInputBinding binding in inputBindings)
             {
-                float[] values = binding.Name == ImageObservationInputName
+                float[] values = binding.Name == imageObservationInputName
                     ? imageObservationBuffer
                     : numericObservationBuffer;
 
@@ -470,7 +538,7 @@ namespace EnvForge.Navigation.Inference
             };
         }
 
-        private static bool TryResolveInputs(
+        private bool TryResolveInputs(
             InferenceSession modelSession,
             out IReadOnlyList<ModelInputBinding> resolvedInputs,
             out string error)
@@ -478,33 +546,53 @@ namespace EnvForge.Navigation.Inference
             List<ModelInputBinding> bindings = new();
             bool hasImageObservation = false;
             bool hasNumericObservation = false;
+            if (modelSession.InputMetadata.Count != 2)
+            {
+                resolvedInputs = Array.Empty<ModelInputBinding>();
+                error = "Expected exactly two ONNX inputs from the current Scenario.";
+                return false;
+            }
+
             foreach (KeyValuePair<string, NodeMetadata> input in modelSession.InputMetadata)
             {
                 if (input.Value.ElementDataType != TensorElementType.Float)
                 {
-                    continue;
+                    resolvedInputs = Array.Empty<ModelInputBinding>();
+                    error = $"Input '{input.Key}' must use float32.";
+                    return false;
                 }
 
                 string normalizedName = input.Key?.Trim() ?? string.Empty;
                 int valueCount;
-                if (normalizedName == ImageObservationInputName)
+                int[] expectedDimensions;
+                if (normalizedName == imageObservationInputName)
                 {
-                    valueCount = ImageObservationValueCount;
+                    valueCount = imageObservationValueCount;
+                    expectedDimensions = new[]
+                    {
+                        ImageObservationChannels,
+                        imageObservationHeight,
+                        imageObservationWidth,
+                    };
                     hasImageObservation = true;
                 }
-                else if (normalizedName == NumericObservationInputName)
+                else if (normalizedName == numericObservationInputName)
                 {
                     valueCount = NumericObservationValueCount;
+                    expectedDimensions = new[] { NumericObservationValueCount };
                     hasNumericObservation = true;
                 }
                 else
                 {
                     resolvedInputs = Array.Empty<ModelInputBinding>();
-                    error = $"Unsupported ONNX float input '{input.Key}'. Expected only obs_0 and obs_1.";
+                    error = $"Unsupported ONNX input '{input.Key}'. Expected only the current Scenario observations.";
                     return false;
                 }
 
-                if (!TryResolveInputDimensions(input.Value.Dimensions, valueCount, out int[] dimensions))
+                if (!TryResolveInputDimensions(
+                        input.Value.Dimensions,
+                        expectedDimensions,
+                        out int[] dimensions))
                 {
                     resolvedInputs = Array.Empty<ModelInputBinding>();
                     error = $"Input '{input.Key}' dimensions do not match the current EnvForge policy contract.";
@@ -517,7 +605,7 @@ namespace EnvForge.Navigation.Inference
             if (!hasImageObservation || !hasNumericObservation)
             {
                 resolvedInputs = Array.Empty<ModelInputBinding>();
-                error = "Expected current EnvForge policy inputs obs_0 (3x84x112 image) and obs_1 (2 numeric values).";
+                error = "The model inputs do not match both Scenario observations.";
                 return false;
             }
 
@@ -526,75 +614,77 @@ namespace EnvForge.Navigation.Inference
             return true;
         }
 
-        private static bool TryResolveInputDimensions(int[] modelDimensions, int valueCount, out int[] resolvedDimensions)
+        private static bool TryResolveInputDimensions(
+            int[] modelDimensions,
+            int[] expectedDimensions,
+            out int[] resolvedDimensions)
         {
-            if (modelDimensions == null || modelDimensions.Length == 0)
+            if (modelDimensions == null || expectedDimensions == null)
             {
-                resolvedDimensions = new[] { valueCount };
-                return true;
+                resolvedDimensions = Array.Empty<int>();
+                return false;
             }
 
             resolvedDimensions = (int[])modelDimensions.Clone();
-            int dynamicIndex = -1;
-            int knownProduct = 1;
-            for (int i = 0; i < resolvedDimensions.Length; i++)
+            int offset;
+            if (resolvedDimensions.Length == expectedDimensions.Length)
             {
-                int dimension = resolvedDimensions[i];
-                if (dimension <= 0)
+                offset = 0;
+            }
+            else if (resolvedDimensions.Length == expectedDimensions.Length + 1 &&
+                     (resolvedDimensions[0] <= 0 || resolvedDimensions[0] == 1))
+            {
+                resolvedDimensions[0] = 1;
+                offset = 1;
+            }
+            else
+            {
+                return false;
+            }
+
+            for (int index = 0; index < expectedDimensions.Length; index++)
+            {
+                if (resolvedDimensions[index + offset] != expectedDimensions[index])
                 {
-                    if (dynamicIndex < 0)
-                    {
-                        dynamicIndex = i;
-                    }
-
-                    resolvedDimensions[i] = 1;
-                    continue;
+                    return false;
                 }
-
-                knownProduct *= dimension;
             }
 
-            int product = Product(resolvedDimensions);
-            if (product == valueCount)
-            {
-                return true;
-            }
-
-            if (dynamicIndex >= 0 && knownProduct > 0 && valueCount % knownProduct == 0)
-            {
-                resolvedDimensions[dynamicIndex] = valueCount / knownProduct;
-                return Product(resolvedDimensions) == valueCount;
-            }
-
-            return false;
+            return true;
         }
 
         private static bool TryResolveOutput(InferenceSession modelSession, out string resolvedName, out string error)
         {
-            foreach (KeyValuePair<string, NodeMetadata> output in modelSession.OutputMetadata)
+            if (modelSession.OutputMetadata.Count == 1 &&
+                modelSession.OutputMetadata.TryGetValue(ActionOutputName, out NodeMetadata output) &&
+                output.ElementDataType == TensorElementType.Float &&
+                IsActionOutputShape(output.Dimensions))
             {
-                if (output.Value.ElementDataType == TensorElementType.Float)
-                {
-                    resolvedName = output.Key;
-                    error = string.Empty;
-                    return true;
-                }
+                resolvedName = ActionOutputName;
+                error = string.Empty;
+                return true;
             }
 
             resolvedName = string.Empty;
-            error = "Expected a float output with 2 continuous action values.";
+            error = "Expected only float output 'action' with shape [2], [1,2], or [-1,2].";
             return false;
         }
 
-        private static int Product(int[] values)
+        private static bool IsActionOutputShape(int[] dimensions)
         {
-            int product = 1;
-            for (int i = 0; i < values.Length; i++)
-            {
-                product *= values[i];
-            }
+            return dimensions != null &&
+                ((dimensions.Length == 1 && dimensions[0] == 2) ||
+                 (dimensions.Length == 2 &&
+                  (dimensions[0] <= 0 || dimensions[0] == 1) &&
+                  dimensions[1] == 2));
+        }
 
-            return product;
+        private static bool IsFinitePositive(double value)
+        {
+            return !double.IsNaN(value) &&
+                !double.IsInfinity(value) &&
+                value > 0d &&
+                value <= float.MaxValue;
         }
 
         private void ApplyTrainingMotionProfile()
@@ -605,8 +695,8 @@ namespace EnvForge.Navigation.Inference
             }
 
             motor.SetMotionProfile(
-                TrainingForwardStepMeters / TrainingStepSeconds,
-                TrainingTurnDegreesPerStep / TrainingStepSeconds);
+                forwardStepMeters / stepDurationSeconds,
+                turnDegreesPerStep / stepDurationSeconds);
         }
 
         private static void WriteNumericObservation(NavigationGoalObservation observation, float[] values)
@@ -621,7 +711,7 @@ namespace EnvForge.Navigation.Inference
 
         private bool TryCaptureImageObservation(float[] values)
         {
-            if (values == null || values.Length < ImageObservationValueCount)
+            if (values == null || values.Length != imageObservationValueCount)
             {
                 return false;
             }
@@ -646,18 +736,18 @@ namespace EnvForge.Navigation.Inference
                 segmentationCamera.targetTexture = imageObservationTexture;
                 segmentationCamera.Render();
                 RenderTexture.active = imageObservationTexture;
-                imageObservationReadback.ReadPixels(new Rect(0, 0, ImageObservationWidth, ImageObservationHeight), 0, 0);
+                imageObservationReadback.ReadPixels(new Rect(0, 0, imageObservationWidth, imageObservationHeight), 0, 0);
                 imageObservationReadback.Apply();
 
                 Color32[] pixels = imageObservationReadback.GetPixels32();
-                int planeSize = ImageObservationHeight * ImageObservationWidth;
-                for (int row = 0; row < ImageObservationHeight; row++)
+                int planeSize = imageObservationHeight * imageObservationWidth;
+                for (int row = 0; row < imageObservationHeight; row++)
                 {
-                    int flippedRow = ImageObservationHeight - 1 - row;
-                    for (int column = 0; column < ImageObservationWidth; column++)
+                    int flippedRow = imageObservationHeight - 1 - row;
+                    for (int column = 0; column < imageObservationWidth; column++)
                     {
-                        int sourceIndex = flippedRow * ImageObservationWidth + column;
-                        int targetIndex = row * ImageObservationWidth + column;
+                        int sourceIndex = flippedRow * imageObservationWidth + column;
+                        int targetIndex = row * imageObservationWidth + column;
                         Color32 pixel = pixels[sourceIndex];
                         values[targetIndex] = pixel.r / 255f;
                         values[planeSize + targetIndex] = pixel.g / 255f;
@@ -682,7 +772,7 @@ namespace EnvForge.Navigation.Inference
 
         private void UpdateImageObservationSummary(float[] values, string source)
         {
-            int planeSize = ImageObservationHeight * ImageObservationWidth;
+            int planeSize = imageObservationHeight * imageObservationWidth;
             double red = 0d;
             double green = 0d;
             double blue = 0d;
@@ -701,7 +791,7 @@ namespace EnvForge.Navigation.Inference
         {
             if (imageObservationTexture == null)
             {
-                imageObservationTexture = new RenderTexture(ImageObservationWidth, ImageObservationHeight, 16, RenderTextureFormat.ARGB32)
+                imageObservationTexture = new RenderTexture(imageObservationWidth, imageObservationHeight, 16, RenderTextureFormat.ARGB32)
                 {
                     name = "EnvForge Image Observation",
                 };
@@ -710,7 +800,7 @@ namespace EnvForge.Navigation.Inference
 
             if (imageObservationReadback == null)
             {
-                imageObservationReadback = new Texture2D(ImageObservationWidth, ImageObservationHeight, TextureFormat.RGB24, mipChain: false)
+                imageObservationReadback = new Texture2D(imageObservationWidth, imageObservationHeight, TextureFormat.RGB24, mipChain: false)
                 {
                     name = "EnvForge Image Observation Readback",
                 };
