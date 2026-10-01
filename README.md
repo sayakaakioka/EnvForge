@@ -66,6 +66,11 @@ repository. This project pins the package to a specific SDK main commit in
 `Packages/manifest.json`; validation status for each EnvForge target is tracked
 under `docs/implementation/`.
 
+The application uses the snapshot API from SDK commit
+`51af750807626c15da6bf873f6d010f7a78e6fa1`. Result snapshots are converted to
+independent wire documents at the history and artifact metadata boundaries.
+Validation details are recorded in `docs/implementation/embodiedlab-unity-sdk-migration.md`.
+
 ## Artifacts
 
 EnvForge downloads cloud artifacts into Unity's

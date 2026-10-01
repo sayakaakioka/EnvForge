@@ -48,7 +48,7 @@ namespace EnvForge.Navigation.Cloud
         private EmbodiedLabJob activeJob;
         private EnvForgeJobHistoryStore jobHistoryStore;
         private readonly CancellationTokenSource lifetimeCancellation = new();
-        private ResultDocument latestResult;
+        private ResultSnapshot latestResult;
         private string submissionId;
         private string activeScenarioId;
         private string loadedReplaySummary;
@@ -670,7 +670,7 @@ namespace EnvForge.Navigation.Cloud
             resultFetchInFlight = true;
             try
             {
-                ResultDocument result = await job.RefreshAsync(lifetimeCancellation.Token);
+                ResultSnapshot result = await job.RefreshAsync(lifetimeCancellation.Token);
                 if (!ReferenceEquals(job, activeJob))
                 {
                     return;
@@ -746,7 +746,7 @@ namespace EnvForge.Navigation.Cloud
             }
         }
 
-        private void OnActiveJobResultUpdated(ResultDocument result)
+        private void OnActiveJobResultUpdated(ResultSnapshot result)
         {
             ApplyResultUpdate(
                 result,
@@ -755,7 +755,7 @@ namespace EnvForge.Navigation.Cloud
         }
 
         private bool ApplyResultUpdate(
-            ResultDocument result,
+            ResultSnapshot result,
             string expectedSubmissionId = null,
             bool countStreamEvent = true)
         {
@@ -782,7 +782,7 @@ namespace EnvForge.Navigation.Cloud
                 CultureInfo.InvariantCulture);
             try
             {
-                jobHistoryStore.UpsertResult(resultSubmissionId, result);
+                jobHistoryStore.UpsertResult(resultSubmissionId, result.ToDocument());
             }
             catch (Exception exception)
             {
@@ -817,7 +817,7 @@ namespace EnvForge.Navigation.Cloud
             status = "Cloud: requesting cancellation";
             try
             {
-                ResultDocument result = await job.CancelAsync(lifetimeCancellation.Token);
+                ResultSnapshot result = await job.CancelAsync(lifetimeCancellation.Token);
                 if (ReferenceEquals(job, activeJob))
                 {
                     status = $"Cloud: {FormatStatus(result.Status)}";
@@ -1006,7 +1006,7 @@ namespace EnvForge.Navigation.Cloud
 
         private ResultArtifacts GetResultArtifacts()
         {
-            return latestResult?.ResultBundle?.Artifacts;
+            return latestResult?.ToDocument().ResultBundle?.Artifacts;
         }
 
         private bool IsCompletedResult()
@@ -1750,7 +1750,7 @@ namespace EnvForge.Navigation.Cloud
                 }
 
                 using EmbodiedLabJob job = restoredJob;
-                ResultDocument fetchedResult = await job.RefreshAsync(lifetimeCancellation.Token);
+                ResultSnapshot fetchedResult = await job.RefreshAsync(lifetimeCancellation.Token);
                 if (jobHistoryStore.FindJob(requestedSubmissionId) == null)
                 {
                     return true;
@@ -1762,7 +1762,7 @@ namespace EnvForge.Navigation.Cloud
                 }
                 else
                 {
-                    jobHistoryStore.UpsertResult(requestedSubmissionId, fetchedResult);
+                    jobHistoryStore.UpsertResult(requestedSubmissionId, fetchedResult.ToDocument());
                 }
 
                 return true;
@@ -2072,7 +2072,7 @@ namespace EnvForge.Navigation.Cloud
 
         private string FormatProgressSummary()
         {
-            Progress progress = latestResult?.Progress;
+            ResultProgressSnapshot progress = latestResult?.Progress;
             if (progress == null)
             {
                 return "Progress: none";

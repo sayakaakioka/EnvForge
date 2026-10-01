@@ -1,7 +1,7 @@
 {
   "dependencies": {
     "com.embodiedlab.unity": {
-      "version": "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#abb976ea97b1010fb3a6dbfb177cefdde5aa90b6",
+      "version": "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#51af750807626c15da6bf873f6d010f7a78e6fa1",
       "depth": 0,
       "source": "git",
       "dependencies": {
@@ -9,7 +9,7 @@
         "com.unity.modules.imgui": "1.0.0",
         "com.unity.modules.physics": "1.0.0"
       },
-      "hash": "abb976ea97b1010fb3a6dbfb177cefdde5aa90b6"
+      "hash": "51af750807626c15da6bf873f6d010f7a78e6fa1"
     },
     "com.unity.ai.navigation": {
       "version": "2.0.11",
