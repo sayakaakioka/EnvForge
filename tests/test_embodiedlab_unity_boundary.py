@@ -27,7 +27,7 @@ CONTRACT_DEFAULTS_SOURCE = (
     / "NavigationScenarioBundleDefaults.cs"
 )
 LOCAL_ONNX_RUNTIME = UNITY_PROJECT / "Assets" / "Plugins" / "ONNXRuntime"
-SDK_REVISION = "abb976ea97b1010fb3a6dbfb177cefdde5aa90b6"
+SDK_REVISION = "51af750807626c15da6bf873f6d010f7a78e6fa1"
 SDK_URL = "https://github.com/sayakaakioka/EmbodiedLab.Unity.git#" + SDK_REVISION
 
 
@@ -88,7 +88,7 @@ class EmbodiedLabUnityBoundaryTests(unittest.TestCase):
         history = (CLOUD_SOURCE / "EnvForgeJobHistoryStore.cs").read_text(
             encoding="utf-8"
         )
-        self.assertIn("latestResult?.ResultBundle?.Artifacts", panel)
+        self.assertIn("latestResult?.ToDocument().ResultBundle?.Artifacts", panel)
         self.assertIn("result.ResultBundle?.Artifacts", history)
 
     def test_replay_manifest_reads_include_job_identity(self):
@@ -137,6 +137,22 @@ class EmbodiedLabUnityBoundaryTests(unittest.TestCase):
             )
             self.assertIn("value <= float.MaxValue", source)
         self.assertIn("checked(", inference)
+
+    def test_canonical_fixtures_use_onnx_only_and_a_zero_reward_reset(self):
+        result = self._read_json(ROOT / "fixtures/result-documents/navigation_completed.json")
+        artifacts = result["result_bundle"]["artifacts"]
+        self.assertNotIn("sentis_model", artifacts)
+        self.assertEqual(18, artifacts["onnx_model"]["opset_version"])
+        lines = (ROOT / "fixtures/replay-logs/navigation_default_replay.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        reset = json.loads(lines[0])
+        self.assertEqual(0, reset["step_index"])
+        self.assertEqual(0, reset["reward"]["total"])
+        self.assertEqual([], reset["reward"]["components"])
+        self.assertEqual([], reset["events"])
+        self.assertTrue(all(action["value"] == 0 for action in reset["action"]["values"]))
+        self.assertEqual(result["submission_id"], reset["job_id"])
 
     @staticmethod
     def _read_json(path):
